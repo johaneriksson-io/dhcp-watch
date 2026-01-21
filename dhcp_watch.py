@@ -223,7 +223,7 @@ def main():
                 log_file.write(format_output(packet, use_color=False) + "\n")
                 log_file.flush()
 
-                if config:
+                if config and packet["msg_type"] == "Discover":
                     send_telegram_alert(config, packet)
 
     except KeyboardInterrupt:
