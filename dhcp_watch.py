@@ -170,6 +170,21 @@ def send_telegram_alert(config, packet_info):
         print(f"Failed to send Telegram alert: {e}", file=sys.stderr)
 
 
+def get_external_ip(ipv6=False):
+    """Fetch external IP address using ifconfig.me."""
+    try:
+        cmd = ["curl", "-s", "-m", "5"]
+        if not ipv6:
+            cmd.append("-4")
+        cmd.append("ifconfig.me")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return None
+
+
 def main():
     """Main entry point."""
     config = load_config()
@@ -182,6 +197,15 @@ def main():
         print("Telegram alerts: enabled")
     else:
         print(f"Telegram alerts: disabled (configure in {CONFIG_FILE})")
+
+    # Display external IP addresses
+    ext_ipv4 = get_external_ip(ipv6=False)
+    ext_ipv6 = get_external_ip(ipv6=True)
+    if ext_ipv4:
+        print(f"External IPv4: {ext_ipv4}")
+    if ext_ipv6:
+        print(f"External IPv6: {ext_ipv6}")
+
     print("Press Ctrl+C to stop.\n")
 
     cmd = [
