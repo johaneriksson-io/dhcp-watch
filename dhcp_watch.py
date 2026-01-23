@@ -185,6 +185,18 @@ def get_external_ip(ipv6=False):
     return None
 
 
+def get_geolocation():
+    """Fetch geolocation info using ipinfo.io."""
+    try:
+        cmd = ["curl", "-s", "-m", "5", "ipinfo.io"]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode == 0 and result.stdout.strip():
+            return json.loads(result.stdout)
+    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
+        pass
+    return None
+
+
 def main():
     """Main entry point."""
     config = load_config()
@@ -198,13 +210,19 @@ def main():
     else:
         print(f"Telegram alerts: disabled (configure in {CONFIG_FILE})")
 
-    # Display external IP addresses
+    # Display external IP addresses and geolocation
     ext_ipv4 = get_external_ip(ipv6=False)
     ext_ipv6 = get_external_ip(ipv6=True)
+    geo = get_geolocation()
     if ext_ipv4:
         print(f"External IPv4: {ext_ipv4}")
     if ext_ipv6:
         print(f"External IPv6: {ext_ipv6}")
+    if geo:
+        city = geo.get("city", "unknown")
+        country = geo.get("country", "unknown")
+        loc = geo.get("loc", "unknown")
+        print(f"Location: {city}, {country} ({loc})")
 
     print("Press Ctrl+C to stop.\n")
 
