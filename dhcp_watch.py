@@ -209,17 +209,14 @@ def main():
                 now = time.time()
                 last_seen = mac_last_seen.get(mac)
                 suppressed = last_seen is not None and (now - last_seen) < DEBOUNCE_SECONDS
+                mac_last_seen[mac] = now
 
                 output = format_output(packet, suppressed=suppressed, use_color=True)
                 print(output)
 
-                if packet["hostname"] == "Watch":
-                    continue
-
                 if suppressed:
                     continue
 
-                mac_last_seen[mac] = now
                 log_file.write(format_output(packet, use_color=False) + "\n")
                 log_file.flush()
 
