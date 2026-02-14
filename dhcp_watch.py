@@ -11,6 +11,7 @@ import sys
 import re
 import json
 import time
+import os
 import urllib.request
 import urllib.parse
 from pathlib import Path
@@ -19,6 +20,7 @@ from datetime import datetime
 LOG_FILE = "/tmp/dhcp_watch.log"
 DEBOUNCE_SECONDS = 300  # 5 minutes
 INTERFACE = "any"
+TCPDUMP_CMD = "tcpdump"
 CONFIG_FILE = Path(__file__).parent / "config.json"
 
 
@@ -32,7 +34,12 @@ def parse_tcpdump_output(process):
     hostname = None
 
     # Regex patterns
-    timestamp_pattern = re.compile(r"^(\d{2}:\d{2}:\d{2}\.\d+)\s+IP")
+    # Linux/macOS tcpdump can emit either:
+    #   "11:45:41.796498 IP ..."
+    #   "11:45:41.957616 wlan0 B   IP ..."
+    timestamp_pattern = re.compile(
+        r"^(\d{2}:\d{2}:\d{2}\.\d+)\s+(?:\S+\s+[BI]\s+)?IP\b"
+    )
     request_pattern = re.compile(r"DHCP-Message.*Request")
     discover_pattern = re.compile(r"DHCP-Message.*Discover")
     mac_pattern = re.compile(r"Client-Ethernet-Address\s+([0-9a-f:]+)", re.IGNORECASE)
@@ -44,7 +51,6 @@ def parse_tcpdump_output(process):
         line = line.strip()
         if not line:
             continue
-
         # Check for new packet (starts with timestamp)
         ts_match = timestamp_pattern.match(line)
         if ts_match:
@@ -227,8 +233,7 @@ def main():
     print("Press Ctrl+C to stop.\n")
 
     cmd = [
-        "sudo",
-        "tcpdump",
+        TCPDUMP_CMD,
         "-i", INTERFACE,
         "port", "67", "or", "port", "68",
         "-n",
@@ -236,11 +241,18 @@ def main():
         "-l",  # Line-buffered output
     ]
 
+    if os.geteuid() != 0:
+        print("Warning: not running as root.")
+        print(
+            "tcpdump may fail without privileges. "
+            "Try: sudo python3 dhcp_watch.py"
+        )
+
     try:
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
         )
