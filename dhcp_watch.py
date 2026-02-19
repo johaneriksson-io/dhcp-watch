@@ -34,6 +34,75 @@ GEOLOCATION_LOOKUP_HOST = "ipinfo.io"
 # Cache OUI prefix -> vendor name to avoid repeated API calls
 _vendor_cache = {}
 
+# Cache IP -> device type to avoid repeated nmap probes
+_device_type_cache = {}
+
+# Ports that reliably identify device types
+_NMAP_PORT_DEVICE_MAP = {
+    62078: "iPhone/iPad",   # iphone-sync (Apple wireless sync)
+    7000: "AirPlay device", # Apple AirPlay
+    548: "Mac",             # Apple Filing Protocol
+    5009: "Apple TV",       # Apple TV remote
+}
+
+
+def probe_device_type(ip):
+    """Use nmap to guess device type from open ports and OS fingerprint.
+
+    Only called when MAC vendor lookup fails (e.g. randomised MAC).
+    Results are cached by IP.
+    """
+    if not ip or ip == UNKNOWN_VALUE:
+        return None
+    if ip in _device_type_cache:
+        return _device_type_cache[ip]
+
+    device_type = None
+    try:
+        ports = ",".join(str(p) for p in _NMAP_PORT_DEVICE_MAP)
+        result = subprocess.run(
+            [
+                "nmap", "-Pn", "-O", "--osscan-guess",
+                "-T4", "--open",
+                "-p", ports,
+                ip,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        output = result.stdout
+
+        # Port matches are most reliable
+        for port, dtype in _NMAP_PORT_DEVICE_MAP.items():
+            if f"{port}/tcp" in output:
+                device_type = dtype
+                break
+
+        # Fall back to OS fingerprint
+        if not device_type:
+            os_match = re.search(r"Aggressive OS guesses: ([^\n]+)", output)
+            if os_match:
+                guess = os_match.group(1).split("(")[0].strip().rstrip(",")
+                if "iOS" in guess or "iPhone" in guess or "iPad" in guess:
+                    device_type = "iPhone/iPad"
+                elif "macOS" in guess or "Mac OS" in guess or "Darwin" in guess:
+                    device_type = "Mac"
+                elif "Android" in guess:
+                    device_type = "Android"
+                elif "Windows" in guess:
+                    device_type = "Windows PC"
+                elif "Linux" in guess:
+                    device_type = "Linux"
+                elif "Apple" in guess:
+                    device_type = "Apple device"
+
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    _device_type_cache[ip] = device_type
+    return device_type
+
 
 def lookup_vendor(mac):
     """Look up the vendor for a MAC address using macvendors.com API.
@@ -154,6 +223,7 @@ def format_output(packet_info, suppressed=False, use_color=False):
     msg_type = packet_info.get("msg_type", MSG_TYPE_REQUEST)
 
     vendor = packet_info.get("vendor")
+    device_type = packet_info.get("device_type")
     fields = [full_timestamp, f"{msg_type:8}"]
     if packet_info["hostname"] != UNKNOWN_VALUE:
         fields.append(f"Host: {packet_info['hostname']}")
@@ -161,8 +231,9 @@ def format_output(packet_info, suppressed=False, use_color=False):
         fields.append(f"IP: {packet_info['ip']}")
     if packet_info["mac"] != UNKNOWN_VALUE:
         mac_str = packet_info["mac"]
-        if vendor:
-            mac_str += f" ({vendor})"
+        label = vendor or device_type
+        if label:
+            mac_str += f" ({label})"
         fields.append(f"MAC: {mac_str}")
     output = " | ".join(fields)
     if suppressed:
@@ -209,18 +280,21 @@ def send_telegram_alert(config, packet_info, location=None):
     ts = packet_info["timestamp"].split(".")[0]
 
     vendor = packet_info.get("vendor")
+    device_type = packet_info.get("device_type")
     lines = []
     if location:
         lines.append(location)
-    lines.append(f"Time: {today} {ts}")
     if packet_info["hostname"] != UNKNOWN_VALUE:
-        lines.append(f"DHCP: {packet_info['hostname']}")
+        lines.append(f"Hostname: {packet_info['hostname']}")
+    if vendor:
+        lines.append(f"Vendor: {vendor}")
+    elif device_type:
+        lines.append(f"Device: {device_type}")
     if packet_info["ip"] != UNKNOWN_VALUE:
         lines.append(f"IP: {packet_info['ip']}")
     if packet_info["mac"] != UNKNOWN_VALUE:
         lines.append(f"MAC: {packet_info['mac']}")
-    if vendor:
-        lines.append(f"Vendor: {vendor}")
+    lines.append(f"Time: {today} {ts}")
     message = "\n".join(lines)
 
     send_telegram_message(config, message)
@@ -328,6 +402,10 @@ def main():
                 mac_last_seen[mac] = now
 
                 packet["vendor"] = lookup_vendor(mac)
+                if not packet["vendor"] and packet["ip"] != UNKNOWN_VALUE:
+                    packet["device_type"] = probe_device_type(packet["ip"])
+                else:
+                    packet["device_type"] = None
                 output = format_output(packet, suppressed=suppressed, use_color=True)
                 print(output)
 
