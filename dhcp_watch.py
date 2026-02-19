@@ -146,14 +146,17 @@ def format_output(packet_info, suppressed=False, use_color=False):
     msg_type = packet_info.get("msg_type", "Request")
 
     vendor = packet_info.get("vendor")
-    vendor_str = f" ({vendor})" if vendor else ""
-    output = (
-        f"{full_timestamp} | "
-        f"{msg_type:8} | "
-        f"Host: {packet_info['hostname']} | "
-        f"IP: {packet_info['ip']} | "
-        f"MAC: {packet_info['mac']}{vendor_str}"
-    )
+    fields = [full_timestamp, f"{msg_type:8}"]
+    if packet_info["hostname"] != "unknown":
+        fields.append(f"Host: {packet_info['hostname']}")
+    if packet_info["ip"] != "unknown":
+        fields.append(f"IP: {packet_info['ip']}")
+    if packet_info["mac"] != "unknown":
+        mac_str = packet_info["mac"]
+        if vendor:
+            mac_str += f" ({vendor})"
+        fields.append(f"MAC: {mac_str}")
+    output = " | ".join(fields)
     if suppressed:
         output += " [suppressed]"
 
@@ -184,13 +187,16 @@ def send_telegram_alert(config, packet_info):
     ts = packet_info["timestamp"].split(".")[0]
 
     vendor = packet_info.get("vendor")
-    vendor_line = f"\nVendor: {vendor}" if vendor else ""
-    message = (
-        f"DHCP: {packet_info['hostname']}\n"
-        f"IP: {packet_info['ip']}\n"
-        f"Time: {today} {ts}\n"
-        f"MAC: {packet_info['mac']}{vendor_line}"
-    )
+    lines = [f"Time: {today} {ts}"]
+    if packet_info["hostname"] != "unknown":
+        lines.append(f"DHCP: {packet_info['hostname']}")
+    if packet_info["ip"] != "unknown":
+        lines.append(f"IP: {packet_info['ip']}")
+    if packet_info["mac"] != "unknown":
+        lines.append(f"MAC: {packet_info['mac']}")
+    if vendor:
+        lines.append(f"Vendor: {vendor}")
+    message = "\n".join(lines)
 
     url = f"https://api.telegram.org/bot{config['bot_token']}/sendMessage"
     data = urllib.parse.urlencode({
