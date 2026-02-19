@@ -23,6 +23,31 @@ INTERFACE = "any"
 TCPDUMP_CMD = "tcpdump"
 CONFIG_FILE = Path(__file__).parent / "config.json"
 
+# Cache OUI prefix -> vendor name to avoid repeated API calls
+_vendor_cache = {}
+
+
+def lookup_vendor(mac):
+    """Look up the vendor for a MAC address using macvendors.com API.
+
+    Caches results by OUI prefix (first 3 octets) so devices from the
+    same manufacturer share a single lookup.
+    """
+    if not mac or mac == "unknown":
+        return None
+    oui = mac[:8].upper()  # e.g. "F0:81:73"
+    if oui in _vendor_cache:
+        return _vendor_cache[oui]
+    try:
+        url = f"https://api.macvendors.com/{urllib.parse.quote(oui)}"
+        req = urllib.request.Request(url, headers={"User-Agent": "dhcp-watch/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            vendor = response.read().decode().strip()
+    except Exception:
+        vendor = None
+    _vendor_cache[oui] = vendor
+    return vendor
+
 
 def parse_tcpdump_output(process):
     """Parse tcpdump output line by line using a state machine."""
@@ -120,12 +145,14 @@ def format_output(packet_info, suppressed=False, use_color=False):
     full_timestamp = f"{today} {ts}"
     msg_type = packet_info.get("msg_type", "Request")
 
+    vendor = packet_info.get("vendor")
+    vendor_str = f" ({vendor})" if vendor else ""
     output = (
         f"{full_timestamp} | "
         f"{msg_type:8} | "
         f"Host: {packet_info['hostname']} | "
         f"IP: {packet_info['ip']} | "
-        f"MAC: {packet_info['mac']}"
+        f"MAC: {packet_info['mac']}{vendor_str}"
     )
     if suppressed:
         output += " [suppressed]"
@@ -156,11 +183,13 @@ def send_telegram_alert(config, packet_info):
     today = datetime.now().strftime("%Y-%m-%d")
     ts = packet_info["timestamp"].split(".")[0]
 
+    vendor = packet_info.get("vendor")
+    vendor_line = f"\nVendor: {vendor}" if vendor else ""
     message = (
         f"DHCP: {packet_info['hostname']}\n"
         f"IP: {packet_info['ip']}\n"
         f"Time: {today} {ts}\n"
-        f"MAC: {packet_info['mac']}"
+        f"MAC: {packet_info['mac']}{vendor_line}"
     )
 
     url = f"https://api.telegram.org/bot{config['bot_token']}/sendMessage"
@@ -265,6 +294,7 @@ def main():
                 suppressed = last_seen is not None and (now - last_seen) < DEBOUNCE_SECONDS
                 mac_last_seen[mac] = now
 
+                packet["vendor"] = lookup_vendor(mac)
                 output = format_output(packet, suppressed=suppressed, use_color=True)
                 print(output)
 
