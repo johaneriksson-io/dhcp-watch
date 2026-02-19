@@ -181,13 +181,16 @@ def load_config():
         return None
 
 
-def send_telegram_alert(config, packet_info):
+def send_telegram_alert(config, packet_info, location=None):
     """Send a Telegram alert for a DHCP request."""
     today = datetime.now().strftime("%Y-%m-%d")
     ts = packet_info["timestamp"].split(".")[0]
 
     vendor = packet_info.get("vendor")
-    lines = [f"Time: {today} {ts}"]
+    lines = []
+    if location:
+        lines.append(location)
+    lines.append(f"Time: {today} {ts}")
     if packet_info["hostname"] != "unknown":
         lines.append(f"DHCP: {packet_info['hostname']}")
     if packet_info["ip"] != "unknown":
@@ -259,11 +262,13 @@ def main():
         print(f"External IPv4: {ext_ipv4}")
     if ext_ipv6:
         print(f"External IPv6: {ext_ipv6}")
+    location = None
     if geo:
         city = geo.get("city", "unknown")
         country = geo.get("country", "unknown")
         loc = geo.get("loc", "unknown")
-        print(f"Location: {city}, {country} ({loc})")
+        location = f"{city}, {country} ({loc})"
+        print(f"Location: {location}")
 
     print("Press Ctrl+C to stop.\n")
 
@@ -311,7 +316,7 @@ def main():
                 log_file.flush()
 
                 if config and packet["msg_type"] == "Discover":
-                    send_telegram_alert(config, packet)
+                    send_telegram_alert(config, packet, location=location)
 
     except KeyboardInterrupt:
         print("\nStopping DHCP watch...")
