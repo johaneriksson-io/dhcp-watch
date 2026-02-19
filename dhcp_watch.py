@@ -22,6 +22,14 @@ DEBOUNCE_SECONDS = 300  # 5 minutes
 INTERFACE = "any"
 TCPDUMP_CMD = "tcpdump"
 CONFIG_FILE = Path(__file__).parent / "config.json"
+MSG_TYPE_REQUEST = "Request"
+MSG_TYPE_DISCOVER = "Discover"
+UNKNOWN_VALUE = "unknown"
+HTTP_USER_AGENT = "dhcp-watch/1.0"
+MAC_VENDOR_API_BASE_URL = "https://api.macvendors.com"
+TELEGRAM_API_BASE_URL = "https://api.telegram.org"
+EXTERNAL_IP_LOOKUP_HOST = "ifconfig.me"
+GEOLOCATION_LOOKUP_HOST = "ipinfo.io"
 
 # Cache OUI prefix -> vendor name to avoid repeated API calls
 _vendor_cache = {}
@@ -33,14 +41,14 @@ def lookup_vendor(mac):
     Caches results by OUI prefix (first 3 octets) so devices from the
     same manufacturer share a single lookup.
     """
-    if not mac or mac == "unknown":
+    if not mac or mac == UNKNOWN_VALUE:
         return None
     oui = mac[:8].upper()  # e.g. "F0:81:73"
     if oui in _vendor_cache:
         return _vendor_cache[oui]
     try:
-        url = f"https://api.macvendors.com/{urllib.parse.quote(oui)}"
-        req = urllib.request.Request(url, headers={"User-Agent": "dhcp-watch/1.0"})
+        url = f"{MAC_VENDOR_API_BASE_URL}/{urllib.parse.quote(oui)}"
+        req = urllib.request.Request(url, headers={"User-Agent": HTTP_USER_AGENT})
         with urllib.request.urlopen(req, timeout=5) as response:
             vendor = response.read().decode().strip()
     except Exception:
@@ -53,7 +61,7 @@ def parse_tcpdump_output(process):
     """Parse tcpdump output line by line using a state machine."""
     # State for current packet being parsed
     timestamp = None
-    msg_type = None  # "Request" or "Discover"
+    msg_type = None
     mac = None
     requested_ip = None
     hostname = None
@@ -89,12 +97,12 @@ def parse_tcpdump_output(process):
 
         # Check for DHCP Request message type
         if request_pattern.search(line):
-            msg_type = "Request"
+            msg_type = MSG_TYPE_REQUEST
             continue
 
         # Check for DHCP Discover message type
         if discover_pattern.search(line):
-            msg_type = "Discover"
+            msg_type = MSG_TYPE_DISCOVER
             continue
 
         # Extract MAC address
@@ -120,9 +128,9 @@ def parse_tcpdump_output(process):
             if msg_type and timestamp:
                 yield {
                     "timestamp": timestamp,
-                    "hostname": hostname or "unknown",
-                    "ip": requested_ip or "unknown",
-                    "mac": mac or "unknown",
+                    "hostname": hostname or UNKNOWN_VALUE,
+                    "ip": requested_ip or UNKNOWN_VALUE,
+                    "mac": mac or UNKNOWN_VALUE,
                     "msg_type": msg_type,
                 }
             # Reset for next packet
@@ -143,15 +151,15 @@ def format_output(packet_info, suppressed=False, use_color=False):
     today = datetime.now().strftime("%Y-%m-%d")
     ts = packet_info["timestamp"].split(".")[0]  # Remove microseconds
     full_timestamp = f"{today} {ts}"
-    msg_type = packet_info.get("msg_type", "Request")
+    msg_type = packet_info.get("msg_type", MSG_TYPE_REQUEST)
 
     vendor = packet_info.get("vendor")
     fields = [full_timestamp, f"{msg_type:8}"]
-    if packet_info["hostname"] != "unknown":
+    if packet_info["hostname"] != UNKNOWN_VALUE:
         fields.append(f"Host: {packet_info['hostname']}")
-    if packet_info["ip"] != "unknown":
+    if packet_info["ip"] != UNKNOWN_VALUE:
         fields.append(f"IP: {packet_info['ip']}")
-    if packet_info["mac"] != "unknown":
+    if packet_info["mac"] != UNKNOWN_VALUE:
         mac_str = packet_info["mac"]
         if vendor:
             mac_str += f" ({vendor})"
@@ -161,7 +169,7 @@ def format_output(packet_info, suppressed=False, use_color=False):
         output += " [suppressed]"
 
     # Highlight DISCOVER packets in console output
-    if use_color and msg_type == "Discover":
+    if use_color and msg_type == MSG_TYPE_DISCOVER:
         output = f"{YELLOW}{output}{RESET}"
 
     return output
@@ -183,7 +191,7 @@ def load_config():
 
 def send_telegram_message(config, text):
     """Send a raw text message via Telegram."""
-    url = f"https://api.telegram.org/bot{config['bot_token']}/sendMessage"
+    url = f"{TELEGRAM_API_BASE_URL}/bot{config['bot_token']}/sendMessage"
     data = urllib.parse.urlencode({
         "chat_id": config["chat_id"],
         "text": text,
@@ -205,11 +213,11 @@ def send_telegram_alert(config, packet_info, location=None):
     if location:
         lines.append(location)
     lines.append(f"Time: {today} {ts}")
-    if packet_info["hostname"] != "unknown":
+    if packet_info["hostname"] != UNKNOWN_VALUE:
         lines.append(f"DHCP: {packet_info['hostname']}")
-    if packet_info["ip"] != "unknown":
+    if packet_info["ip"] != UNKNOWN_VALUE:
         lines.append(f"IP: {packet_info['ip']}")
-    if packet_info["mac"] != "unknown":
+    if packet_info["mac"] != UNKNOWN_VALUE:
         lines.append(f"MAC: {packet_info['mac']}")
     if vendor:
         lines.append(f"Vendor: {vendor}")
@@ -224,7 +232,7 @@ def get_external_ip(ipv6=False):
         cmd = ["curl", "-s", "-m", "5"]
         if not ipv6:
             cmd.append("-4")
-        cmd.append("ifconfig.me")
+        cmd.append(EXTERNAL_IP_LOOKUP_HOST)
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
@@ -236,7 +244,7 @@ def get_external_ip(ipv6=False):
 def get_geolocation():
     """Fetch geolocation info using ipinfo.io."""
     try:
-        cmd = ["curl", "-s", "-m", "5", "ipinfo.io"]
+        cmd = ["curl", "-s", "-m", "5", GEOLOCATION_LOOKUP_HOST]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         if result.returncode == 0 and result.stdout.strip():
             return json.loads(result.stdout)
@@ -268,9 +276,9 @@ def main():
         print(f"External IPv6: {ext_ipv6}")
     location = None
     if geo:
-        city = geo.get("city", "unknown")
-        country = geo.get("country", "unknown")
-        loc = geo.get("loc", "unknown")
+        city = geo.get("city", UNKNOWN_VALUE)
+        country = geo.get("country", UNKNOWN_VALUE)
+        loc = geo.get("loc", UNKNOWN_VALUE)
         location = f"{city}, {country} ({loc})"
         print(f"Location: {location}")
 
@@ -329,7 +337,7 @@ def main():
                 log_file.write(format_output(packet, use_color=False) + "\n")
                 log_file.flush()
 
-                if config and packet["msg_type"] == "Discover":
+                if config and packet["msg_type"] in [MSG_TYPE_DISCOVER, MSG_TYPE_REQUEST]:
                     send_telegram_alert(config, packet, location=location)
 
     except KeyboardInterrupt:
