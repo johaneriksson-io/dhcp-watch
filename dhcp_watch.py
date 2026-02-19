@@ -181,6 +181,20 @@ def load_config():
         return None
 
 
+def send_telegram_message(config, text):
+    """Send a raw text message via Telegram."""
+    url = f"https://api.telegram.org/bot{config['bot_token']}/sendMessage"
+    data = urllib.parse.urlencode({
+        "chat_id": config["chat_id"],
+        "text": text,
+    }).encode()
+    try:
+        req = urllib.request.Request(url, data=data)
+        urllib.request.urlopen(req, timeout=10)
+    except Exception as e:
+        print(f"Failed to send Telegram message: {e}", file=sys.stderr)
+
+
 def send_telegram_alert(config, packet_info, location=None):
     """Send a Telegram alert for a DHCP request."""
     today = datetime.now().strftime("%Y-%m-%d")
@@ -201,17 +215,7 @@ def send_telegram_alert(config, packet_info, location=None):
         lines.append(f"Vendor: {vendor}")
     message = "\n".join(lines)
 
-    url = f"https://api.telegram.org/bot{config['bot_token']}/sendMessage"
-    data = urllib.parse.urlencode({
-        "chat_id": config["chat_id"],
-        "text": message,
-    }).encode()
-
-    try:
-        req = urllib.request.Request(url, data=data)
-        urllib.request.urlopen(req, timeout=10)
-    except Exception as e:
-        print(f"Failed to send Telegram alert: {e}", file=sys.stderr)
+    send_telegram_message(config, message)
 
 
 def get_external_ip(ipv6=False):
@@ -269,6 +273,16 @@ def main():
         loc = geo.get("loc", "unknown")
         location = f"{city}, {country} ({loc})"
         print(f"Location: {location}")
+
+    if config:
+        startup_lines = ["DHCP Watch started"]
+        if ext_ipv4:
+            startup_lines.append(f"IPv4: {ext_ipv4}")
+        if ext_ipv6 and ext_ipv6 != ext_ipv4:
+            startup_lines.append(f"IPv6: {ext_ipv6}")
+        if location:
+            startup_lines.append(f"Location: {location}")
+        send_telegram_message(config, "\n".join(startup_lines))
 
     print("Press Ctrl+C to stop.\n")
 
