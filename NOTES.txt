@@ -1,0 +1,21 @@
+
+
+
+sudo apt install avahi-utils
+
+
+sudo apt update && sudo apt install avahi-daemon avahi-utils
+sudo systemctl enable avahi-daemon
+sudo systemctl start avahi-daemon
+
+
+avahi-browse -a -t
+avahi-browse -a -r -t
+
+
+
+----
+
+https://github.com/nksan/Rpi-SetWiFi-viaBluetooth?tab=readme-ov-file
+
+
