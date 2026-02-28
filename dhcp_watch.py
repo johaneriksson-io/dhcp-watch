@@ -97,7 +97,7 @@ def probe_device_type(ip):
                 elif "Apple" in guess:
                     device_type = "Apple device"
 
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    except (subprocess.TimeoutExpired, FileNotFoundError, PermissionError):
         pass
 
     _device_type_cache[ip] = device_type
@@ -383,6 +383,7 @@ def main():
         TCPDUMP_CMD,
         "-i", INTERFACE,
         "port", "67", "or", "port", "68",
+        "-p",  # No promiscuous mode (not needed for DHCP, avoids warning on 'any')
         "-n",
         "-vvv",
         "-l",  # Line-buffered output
