@@ -438,8 +438,11 @@ def main():
     except FileNotFoundError:
         print("Error: tcpdump not found. Please install it.", file=sys.stderr)
         sys.exit(1)
-    except PermissionError:
-        print("Error: Permission denied. Run with sudo.", file=sys.stderr)
+    except PermissionError as e:
+        import traceback
+        traceback.print_exc()
+        print(f"\nError: Permission denied: {e}", file=sys.stderr)
+        print("Run with sudo.", file=sys.stderr)
         sys.exit(1)
 
 
