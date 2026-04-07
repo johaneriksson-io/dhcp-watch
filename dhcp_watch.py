@@ -335,11 +335,20 @@ def is_hostname_ignored(hostname, ignored_hostnames):
     return any(h.lower() == hostname_lower for h in ignored_hostnames)
 
 
+def is_mac_ignored(mac, ignored_macs):
+    """Return True if the MAC address is in the ignored list (case-insensitive)."""
+    if not ignored_macs or mac == UNKNOWN_VALUE:
+        return False
+    mac_lower = mac.lower()
+    return any(m.lower() == mac_lower for m in ignored_macs)
+
+
 def main():
     """Main entry point."""
     config = load_config()
     mac_last_seen = {}  # Track last alert time per MAC for debouncing
     ignored_hostnames = config.get("ignored_hostnames", []) if config else []
+    ignored_macs = config.get("ignored_macs", []) if config else []
 
     print(f"Starting DHCP watch on interface '{INTERFACE}'...")
     print(f"Logging to: {LOG_FILE}")
@@ -348,6 +357,8 @@ def main():
         print("Telegram alerts: enabled")
         if ignored_hostnames:
             print(f"Ignored hostnames: {', '.join(ignored_hostnames)}")
+        if ignored_macs:
+            print(f"Ignored MACs: {', '.join(ignored_macs)}")
     else:
         print(f"Telegram alerts: disabled (configure in {CONFIG_FILE})")
 
@@ -428,7 +439,8 @@ def main():
                 log_file.flush()
 
                 if config and packet["msg_type"] in [MSG_TYPE_DISCOVER]:
-                    if not is_hostname_ignored(packet["hostname"], ignored_hostnames):
+                    if not is_hostname_ignored(packet["hostname"], ignored_hostnames) and \
+                            not is_mac_ignored(packet["mac"], ignored_macs):
                         send_telegram_alert(config, packet, location=location)
 
     except KeyboardInterrupt:
