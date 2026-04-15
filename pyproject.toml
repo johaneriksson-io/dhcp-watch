@@ -1,0 +1,8 @@
+[project]
+name = "dhcp-watch"
+version = "0.1.0"
+description = "Monitor DHCP Request packets and log device information"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic",
+]
