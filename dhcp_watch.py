@@ -16,6 +16,7 @@ import urllib.request
 import urllib.parse
 from pathlib import Path
 from datetime import datetime
+from config_validator import load_and_validate_config
 
 LOG_FILE = "/tmp/dhcp_watch.log"
 DEBOUNCE_SECONDS = 600
@@ -247,24 +248,15 @@ def format_output(packet_info, suppressed=False, use_color=False):
 
 
 def load_config():
-    """Load Telegram configuration from config file."""
-    if not CONFIG_FILE.exists():
-        return None
-    try:
-        with open(CONFIG_FILE) as f:
-            config = json.load(f)
-        if "bot_token" in config and "chat_id" in config:
-            return config
-        return None
-    except (json.JSONDecodeError, IOError):
-        return None
+    """Load and validate Telegram configuration from config file."""
+    return load_and_validate_config(CONFIG_FILE)
 
 
 def send_telegram_message(config, text):
-    """Send a raw text message via Telegram."""
-    url = f"{TELEGRAM_API_BASE_URL}/bot{config['bot_token']}/sendMessage"
+    """Send a raw text and message via Telegram."""
+    url = f"{TELEGRAM_API_BASE_URL}/bot{config.bot_token}/sendMessage"
     data = urllib.parse.urlencode({
-        "chat_id": config["chat_id"],
+        "chat_id": config.chat_id,
         "text": text,
     }).encode()
     try:
@@ -293,12 +285,15 @@ def send_telegram_alert(config, packet_info, location=None):
     if packet_info["ip"] != UNKNOWN_VALUE:
         lines.append(f"IP: {packet_info['ip']}")
     if packet_info["mac"] != UNKNOWN_VALUE:
-        lines.append(f"MAC: {packet_info['mac']}")
+        mac_str = packet_info["mac"]
+        label = vendor or device_type
+        if label:
+            mac_str += f" ({label})"
+        lines.append(f"MAC: {mac_str}")
     lines.append(f"Time: {today} {ts}")
     message = "\n".join(lines)
 
     send_telegram_message(config, message)
-
 
 def get_external_ip(ipv6=False):
     """Fetch external IP address using ifconfig.me."""
@@ -347,8 +342,8 @@ def main():
     """Main entry point."""
     config = load_config()
     mac_last_seen = {}  # Track last alert time per MAC for debouncing
-    ignored_hostnames = config.get("ignored_hostnames", []) if config else []
-    ignored_macs = config.get("ignored_macs", []) if config else []
+    ignored_hostnames = config.ignored_hostnames if config else []
+    ignored_macs = config.ignored_macs if config else []
 
     print(f"Starting DHCP watch on interface '{INTERFACE}'...")
     print(f"Logging to: {LOG_FILE}")
