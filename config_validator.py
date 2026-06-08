@@ -8,6 +8,7 @@ class ConfigModel(BaseModel):
     chat_id: str = Field(..., min_length=1)
     ignored_hostnames: List[str] = Field(default_factory=list)
     ignored_macs: List[str] = Field(default_factory=list)
+    location: Optional[str] = None
 
 def load_and_validate_config(config_path: Path) -> Optional[ConfigModel]:
     if not config_path.exists():

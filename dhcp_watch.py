@@ -360,18 +360,24 @@ def main():
     # Display external IP addresses and geolocation
     ext_ipv4 = get_external_ip(ipv6=False)
     ext_ipv6 = get_external_ip(ipv6=True)
-    geo = get_geolocation()
     if ext_ipv4:
         print(f"External IPv4: {ext_ipv4}")
     if ext_ipv6:
         print(f"External IPv6: {ext_ipv6}")
+
+    # Prefer a manually configured location; the geo IP lookup is approximate.
     location = None
-    if geo:
-        city = geo.get("city", UNKNOWN_VALUE)
-        country = geo.get("country", UNKNOWN_VALUE)
-        loc = geo.get("loc", UNKNOWN_VALUE)
-        location = f"{city}, {country} ({loc})"
-        print(f"Location: {location}")
+    if config and config.location:
+        location = config.location
+        print(f"Location: {location} (from config)")
+    else:
+        geo = get_geolocation()
+        if geo:
+            city = geo.get("city", UNKNOWN_VALUE)
+            country = geo.get("country", UNKNOWN_VALUE)
+            loc = geo.get("loc", UNKNOWN_VALUE)
+            location = f"{city}, {country} ({loc})"
+            print(f"Location: {location}")
 
     if config:
         startup_lines = ["DHCP Watch started"]

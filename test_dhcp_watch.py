@@ -26,6 +26,7 @@ class TestConfigModel:
         assert config.chat_id == "456"
         assert config.ignored_hostnames == []
         assert config.ignored_macs == []
+        assert config.location is None
 
     def test_valid_config_with_lists(self):
         config = ConfigModel(
@@ -36,6 +37,10 @@ class TestConfigModel:
         )
         assert config.ignored_hostnames == ["host1"]
         assert config.ignored_macs == ["aa:bb:cc:dd:ee:ff"]
+
+    def test_valid_config_with_location(self):
+        config = ConfigModel(bot_token="tok", chat_id="cid", location="Home, Stockholm")
+        assert config.location == "Home, Stockholm"
 
     def test_missing_bot_token(self):
         from pydantic import ValidationError
