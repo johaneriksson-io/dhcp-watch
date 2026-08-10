@@ -61,7 +61,7 @@ class TestWebPage:
         assert "text/html" in response.headers.get("Content-Type", "")
         assert "EventSource" in body
         assert "/events" in body
-        assert "No hosts seen in the last 10 minutes." in body
+        assert "No hosts seen in the last 1 hour." in body
         assert "textContent" in body
 
 
@@ -166,3 +166,25 @@ class TestBindFailure:
         roster = HostRoster()
         with pytest.raises(OSError):
             start_web_server(roster, host="127.0.0.1", port=port)
+
+
+class TestDisconnectHandling:
+    def test_handle_error_suppresses_connection_reset(self, live_server, capsys):
+        _roster, _base_url, httpd, _stop = live_server
+        try:
+            raise ConnectionResetError(54, "Connection reset by peer")
+        except ConnectionResetError:
+            httpd.handle_error(None, ("127.0.0.1", 55288))
+        captured = capsys.readouterr()
+        assert "Exception occurred during processing of request" not in captured.err
+        assert "ConnectionResetError" not in captured.err
+
+    def test_handle_error_still_reports_unexpected_errors(self, live_server, capsys):
+        _roster, _base_url, httpd, _stop = live_server
+        try:
+            raise RuntimeError("unexpected")
+        except RuntimeError:
+            httpd.handle_error(None, ("127.0.0.1", 1))
+        captured = capsys.readouterr()
+        assert "Exception occurred during processing of request" in captured.err
+        assert "RuntimeError" in captured.err

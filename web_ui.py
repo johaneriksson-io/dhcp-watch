@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
@@ -12,6 +13,15 @@ from host_roster import HostRoster
 DEFAULT_BIND_HOST = "0.0.0.0"
 DEFAULT_PORT = 8080
 SSE_HEARTBEAT_SECONDS = 15
+
+# Client disconnects while reading headers (common with EventSource reconnect /
+# aborted navigations) surface here before do_GET runs.
+_BENIGN_DISCONNECT_ERRORS = (
+    BrokenPipeError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    TimeoutError,
+)
 
 _PAGE_HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -91,7 +101,7 @@ _PAGE_HTML = """<!DOCTYPE html>
     <h1>Live hosts</h1>
     <div id="status">Connecting…</div>
     <div id="loading">Loading roster…</div>
-    <div id="empty" class="hidden">No hosts seen in the last 10 minutes.</div>
+    <div id="empty" class="hidden">No hosts seen in the last 1 hour.</div>
     <ul id="hosts" class="hidden"></ul>
   </main>
   <script>
@@ -202,6 +212,13 @@ class HostsHTTPServer(ThreadingHTTPServer):
         self.stop_event = stop_event
         super().__init__(server_address, HostsRequestHandler)
 
+    def handle_error(self, request, client_address) -> None:
+        """Suppress noisy tracebacks for client disconnects mid-request."""
+        exc = sys.exc_info()[1]
+        if isinstance(exc, _BENIGN_DISCONNECT_ERRORS):
+            return
+        super().handle_error(request, client_address)
+
 
 class HostsRequestHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -217,6 +234,12 @@ class HostsRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args) -> None:
         # Keep capture console clean; web access is operational noise.
         return
+
+    def handle(self) -> None:
+        try:
+            super().handle()
+        except _BENIGN_DISCONNECT_ERRORS:
+            return
 
     def do_GET(self) -> None:
         path = urlparse(self.path).path
@@ -259,7 +282,7 @@ class HostsRequestHandler(BaseHTTPRequestHandler):
                 else:
                     self.wfile.write(b": ping\n\n")
                     self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError, OSError):
+        except _BENIGN_DISCONNECT_ERRORS + (OSError,):
             return
 
 
