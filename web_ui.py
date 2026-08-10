@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from host_roster import HostRoster
 
 DEFAULT_BIND_HOST = "0.0.0.0"
-DEFAULT_PORT = 8080
+DEFAULT_PORT = 8888
 SSE_HEARTBEAT_SECONDS = 15
 
 # Client disconnects while reading headers (common with EventSource reconnect /
