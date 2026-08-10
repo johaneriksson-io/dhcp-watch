@@ -12,11 +12,19 @@ import re
 import json
 import time
 import os
+import threading
 import urllib.request
 import urllib.parse
 from pathlib import Path
 from datetime import datetime
 from config_validator import load_and_validate_config
+from host_roster import HostRoster, QUIET_PERIOD_SECONDS, seed_roster_from_log
+from web_ui import (
+    DEFAULT_BIND_HOST,
+    DEFAULT_PORT,
+    start_web_server,
+    stop_web_server,
+)
 
 LOG_FILE = "/tmp/dhcp_watch.log"
 DEBOUNCE_SECONDS = 600
@@ -31,6 +39,9 @@ MAC_VENDOR_API_BASE_URL = "https://api.macvendors.com"
 TELEGRAM_API_BASE_URL = "https://api.telegram.org"
 EXTERNAL_IP_LOOKUP_HOST = "ifconfig.me"
 GEOLOCATION_LOOKUP_HOST = "ipinfo.io"
+WEB_BIND_HOST = DEFAULT_BIND_HOST
+WEB_PORT = DEFAULT_PORT
+AGING_SWEEP_INTERVAL_SECONDS = 5
 
 # Cache OUI prefix -> vendor name to avoid repeated API calls
 _vendor_cache = {}
@@ -338,12 +349,41 @@ def is_mac_ignored(mac, ignored_macs):
     return any(m.lower() == mac_lower for m in ignored_macs)
 
 
+def apply_packet_to_roster(roster, packet, last_seen=None):
+    """Update the live roster from a parsed DHCP packet.
+
+    Called for every detection, including debounce-suppressed ones, and before
+    vendor/nmap lookups so the UI is not gated on those.
+    """
+    return roster.upsert(
+        packet.get("mac"),
+        packet.get("hostname"),
+        packet.get("ip"),
+        last_seen=last_seen if last_seen is not None else time.time(),
+    )
+
+
+def start_aging_sweep(roster, stop_event, interval_seconds=AGING_SWEEP_INTERVAL_SECONDS):
+    """Background timer that ages hosts out even when the LAN is idle."""
+
+    def _loop():
+        while not stop_event.wait(interval_seconds):
+            roster.expire_older_than()
+
+    thread = threading.Thread(target=_loop, name="dhcp-watch-aging", daemon=True)
+    thread.start()
+    return thread
+
+
 def main():
     """Main entry point."""
     config = load_config()
     mac_last_seen = {}  # Track last alert time per MAC for debouncing
     ignored_hostnames = config.ignored_hostnames if config else []
     ignored_macs = config.ignored_macs if config else []
+    roster = HostRoster(quiet_period_seconds=QUIET_PERIOD_SECONDS)
+    web_stop_event = threading.Event()
+    httpd = None
 
     print(f"Starting DHCP watch on interface '{INTERFACE}'...")
     print(f"Logging to: {LOG_FILE}")
@@ -379,6 +419,30 @@ def main():
             location = f"{city}, {country} ({loc})"
             print(f"Location: {location}")
 
+    seeded = seed_roster_from_log(roster, LOG_FILE)
+    print(f"Live roster seed: {seeded} host(s) from log")
+
+    try:
+        httpd, _web_thread, web_stop_event = start_web_server(
+            roster,
+            host=WEB_BIND_HOST,
+            port=WEB_PORT,
+            stop_event=web_stop_event,
+        )
+    except OSError as e:
+        print(f"Error: failed to bind web UI on {WEB_BIND_HOST}:{WEB_PORT}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    print(
+        f"Live hosts page: http://<this-host>:{WEB_PORT}/ "
+        f"(bound {WEB_BIND_HOST}:{WEB_PORT}, unauthenticated LAN access)"
+    )
+    print(
+        "Note: the web UI runs in this process (often as root for capture); "
+        "prefer tcpdump capabilities and host firewall limits when possible."
+    )
+    start_aging_sweep(roster, web_stop_event)
+
     if config:
         startup_lines = ["DHCP Watch started"]
         if ext_ipv4:
@@ -387,6 +451,7 @@ def main():
             startup_lines.append(f"IPv6: {ext_ipv6}")
         if location:
             startup_lines.append(f"Location: {location}")
+        startup_lines.append(f"Live hosts: port {WEB_PORT}")
         send_telegram_message(config, "\n".join(startup_lines))
 
     print("Press Ctrl+C to stop.\n")
@@ -408,6 +473,7 @@ def main():
             "Try: sudo python3 dhcp_watch.py"
         )
 
+    process = None
     try:
         process = subprocess.Popen(
             cmd,
@@ -424,6 +490,9 @@ def main():
                 last_seen = mac_last_seen.get(mac)
                 suppressed = last_seen is not None and (now - last_seen) < DEBOUNCE_SECONDS
                 mac_last_seen[mac] = now
+
+                # Live roster updates on every detection, before vendor/nmap.
+                apply_packet_to_roster(roster, packet, last_seen=now)
 
                 packet["vendor"] = lookup_vendor(mac)
                 if not packet["vendor"] and packet["ip"] != UNKNOWN_VALUE:
@@ -446,7 +515,8 @@ def main():
 
     except KeyboardInterrupt:
         print("\nStopping DHCP watch...")
-        process.terminate()
+        if process is not None:
+            process.terminate()
         sys.exit(0)
     except FileNotFoundError:
         print("Error: tcpdump not found. Please install it.", file=sys.stderr)
@@ -457,6 +527,9 @@ def main():
         print(f"\nError: Permission denied: {e}", file=sys.stderr)
         print("Run with sudo.", file=sys.stderr)
         sys.exit(1)
+    finally:
+        if httpd is not None:
+            stop_web_server(httpd, web_stop_event)
 
 
 if __name__ == "__main__":

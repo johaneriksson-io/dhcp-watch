@@ -12,8 +12,15 @@ from dhcp_watch import (
     load_config,
     get_external_ip,
     get_geolocation,
+    apply_packet_to_roster,
+    start_aging_sweep,
     UNKNOWN_VALUE,
 )
+from host_roster import HostRoster, seed_roster_from_log
+from web_ui import start_web_server, stop_web_server
+import threading
+import time
+import urllib.request
 
 
 # --- config_validator tests ---
@@ -295,3 +302,73 @@ class TestLoadConfig:
     @patch("dhcp_watch.load_and_validate_config", return_value=None)
     def test_returns_none_when_no_config(self, mock_validate):
         assert load_config() is None
+
+
+# --- live roster wiring ---
+
+
+class TestApplyPacketToRoster:
+    def _packet(self, **overrides):
+        packet = {
+            "hostname": "phone",
+            "ip": "192.168.1.10",
+            "mac": "aa:bb:cc:dd:ee:ff",
+            "timestamp": "12:34:56.789",
+            "msg_type": "Request",
+        }
+        packet.update(overrides)
+        return packet
+
+    def test_debounced_style_repeat_still_updates_last_seen(self):
+        roster = HostRoster()
+        apply_packet_to_roster(roster, self._packet(), last_seen=1000.0)
+        apply_packet_to_roster(roster, self._packet(), last_seen=1050.0)
+        hosts = roster.snapshot()
+        assert len(hosts) == 1
+        assert hosts[0]["last_seen"] == 1050.0
+
+    def test_upsert_happens_without_vendor_lookup(self):
+        roster = HostRoster()
+        with patch("dhcp_watch.lookup_vendor") as mock_vendor:
+            apply_packet_to_roster(roster, self._packet(), last_seen=1000.0)
+            mock_vendor.assert_not_called()
+        assert roster.snapshot()[0]["hostname"] == "phone"
+
+
+class TestAgingSweep:
+    def test_idle_sweep_removes_stale_host(self):
+        roster = HostRoster(quiet_period_seconds=1)
+        roster.upsert("aa:bb:cc:dd:ee:ff", "old", "192.168.1.1", last_seen=time.time() - 5)
+        stop = threading.Event()
+        start_aging_sweep(roster, stop, interval_seconds=0.05)
+        deadline = time.time() + 2
+        while time.time() < deadline and roster.snapshot():
+            time.sleep(0.05)
+        stop.set()
+        assert roster.snapshot() == []
+
+
+class TestSeedThenServe:
+    def test_seeded_roster_visible_on_page_startup(self, tmp_path):
+        from datetime import datetime, timedelta
+
+        when = datetime.now() - timedelta(seconds=120)
+        line = (
+            f"{when.strftime('%Y-%m-%d %H:%M:%S')} | Request  | "
+            f"Host: laptop | IP: 192.168.1.20 | MAC: aa:bb:cc:dd:ee:01"
+        )
+        log = tmp_path / "dhcp_watch.log"
+        log.write_text(line + "\n")
+
+        roster = HostRoster()
+        seeded = seed_roster_from_log(roster, log)
+        assert seeded == 1
+
+        httpd, _thread, stop_event = start_web_server(roster, host="127.0.0.1", port=0)
+        try:
+            host, port = httpd.server_address[:2]
+            with urllib.request.urlopen(f"http://{host}:{port}/", timeout=2) as response:
+                assert response.status == 200
+            assert any(h["hostname"] == "laptop" for h in roster.snapshot())
+        finally:
+            stop_web_server(httpd, stop_event)
