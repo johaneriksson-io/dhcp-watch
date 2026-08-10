@@ -2,13 +2,91 @@
 
 from __future__ import annotations
 
+import re
 import threading
 import time
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 UNKNOWN_MAC = "unknown"
 UNKNOWN_VALUE = "unknown"
 QUIET_PERIOD_SECONDS = 600
+
+_LOG_TIMESTAMP = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*\|")
+_LOG_HOST = re.compile(r"Host:\s*([^\|]+)")
+_LOG_IP = re.compile(r"IP:\s*([^\|]+)")
+_LOG_MAC = re.compile(r"MAC:\s*([0-9a-fA-F:]+)(?:\s*\([^)]*\))?")
+
+
+def parse_log_line(line: str) -> dict[str, Any] | None:
+    """Parse one dhcp_watch log line into a roster entry, or None if unusable."""
+    line = line.strip()
+    if not line:
+        return None
+    ts_match = _LOG_TIMESTAMP.match(line)
+    mac_match = _LOG_MAC.search(line)
+    if not ts_match or not mac_match:
+        return None
+    try:
+        last_seen = datetime.strptime(ts_match.group(1), "%Y-%m-%d %H:%M:%S").timestamp()
+    except ValueError:
+        return None
+
+    host_match = _LOG_HOST.search(line)
+    ip_match = _LOG_IP.search(line)
+    hostname = host_match.group(1).strip() if host_match else UNKNOWN_VALUE
+    ip = ip_match.group(1).strip() if ip_match else UNKNOWN_VALUE
+    return {
+        "mac": mac_match.group(1).lower(),
+        "hostname": hostname or UNKNOWN_VALUE,
+        "ip": ip or UNKNOWN_VALUE,
+        "last_seen": last_seen,
+    }
+
+
+def seed_roster_from_log(
+    roster: "HostRoster",
+    log_path: str | Path,
+    *,
+    now: float | None = None,
+    quiet_period_seconds: int | None = None,
+) -> int:
+    """Seed roster from log entries still within the quiet period.
+
+    Best-effort: missing/unreadable logs yield an empty seed. Seeded last_seen
+    is the last *logged* sighting and may lag live detections by up to the
+    debounce window because suppressed packets are not written to the log.
+    """
+    path = Path(log_path)
+    if not path.is_file():
+        return 0
+
+    quiet = (
+        roster._quiet_period_seconds
+        if quiet_period_seconds is None
+        else quiet_period_seconds
+    )
+    cutoff = (time.time() if now is None else now) - quiet
+    best: dict[str, dict[str, Any]] = {}
+
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return 0
+
+    for line in text.splitlines():
+        entry = parse_log_line(line)
+        if entry is None:
+            continue
+        if entry["last_seen"] < cutoff:
+            continue
+        mac = entry["mac"]
+        previous = best.get(mac)
+        if previous is None or entry["last_seen"] > previous["last_seen"]:
+            best[mac] = entry
+
+    return roster.seed_from_entries(list(best.values()))
 
 
 class HostRoster:
