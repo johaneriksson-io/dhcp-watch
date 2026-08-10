@@ -79,7 +79,7 @@ def seed_roster_from_log(
         entry = parse_log_line(line)
         if entry is None:
             continue
-        if entry["last_seen"] < cutoff:
+        if entry["last_seen"] <= cutoff:
             continue
         mac = entry["mac"]
         previous = best.get(mac)
@@ -125,8 +125,8 @@ class HostRoster:
             if existing is None:
                 self._hosts[normalized_mac] = {
                     "mac": normalized_mac,
-                    "hostname": hostname if hostname != UNKNOWN_VALUE else UNKNOWN_VALUE,
-                    "ip": ip if ip != UNKNOWN_VALUE else UNKNOWN_VALUE,
+                    "hostname": hostname,
+                    "ip": ip,
                     "last_seen": seen_at,
                 }
             else:
@@ -163,6 +163,11 @@ class HostRoster:
                 return True
             self._condition.wait(timeout=timeout)
             return self._version > since_version
+
+    def wake_waiters(self) -> None:
+        """Wake SSE/wait loops without changing roster contents (e.g. on shutdown)."""
+        with self._condition:
+            self._condition.notify_all()
 
     def seed_from_entries(self, entries: list[dict[str, Any]]) -> int:
         """Bulk-load seed entries without treating unknown identity specially beyond upsert."""

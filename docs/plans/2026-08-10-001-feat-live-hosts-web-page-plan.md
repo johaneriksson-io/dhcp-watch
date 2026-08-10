@@ -1,7 +1,7 @@
 ---
 title: feat: Live hosts web page
 type: feat
-status: active
+status: completed
 date: 2026-08-10
 origin: docs/brainstorms/2026-08-09-live-hosts-web-page-requirements.md
 ---

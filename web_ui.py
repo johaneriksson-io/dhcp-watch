@@ -100,6 +100,7 @@ _PAGE_HTML = """<!DOCTYPE html>
     const emptyEl = document.getElementById("empty");
     const hostsEl = document.getElementById("hosts");
     let sawSnapshot = false;
+    let lastHosts = null;
 
     function setStatus(text, cls) {
       statusEl.textContent = text;
@@ -123,6 +124,7 @@ _PAGE_HTML = """<!DOCTYPE html>
     }
 
     function renderHosts(hosts) {
+      lastHosts = hosts;
       sawSnapshot = true;
       loadingEl.classList.add("hidden");
       hostsEl.textContent = "";
@@ -178,6 +180,11 @@ _PAGE_HTML = """<!DOCTYPE html>
     }
 
     connect();
+    setInterval(() => {
+      if (lastHosts !== null && sawSnapshot) {
+        renderHosts(lastHosts);
+      }
+    }, 1000);
   </script>
 </body>
 </html>
@@ -277,5 +284,6 @@ def start_web_server(
 def stop_web_server(httpd: HostsHTTPServer, stop_event: threading.Event) -> None:
     """Signal SSE loops to stop and shut down the server."""
     stop_event.set()
+    httpd.roster.wake_waiters()
     httpd.shutdown()
     httpd.server_close()

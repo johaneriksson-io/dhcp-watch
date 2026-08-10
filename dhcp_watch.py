@@ -27,7 +27,7 @@ from web_ui import (
 )
 
 LOG_FILE = "/tmp/dhcp_watch.log"
-DEBOUNCE_SECONDS = 600
+DEBOUNCE_SECONDS = QUIET_PERIOD_SECONDS
 INTERFACE = "any"
 TCPDUMP_CMD = "tcpdump"
 CONFIG_FILE = Path(__file__).parent / "config.json"
@@ -359,7 +359,7 @@ def apply_packet_to_roster(roster, packet, last_seen=None):
         packet.get("mac"),
         packet.get("hostname"),
         packet.get("ip"),
-        last_seen=last_seen if last_seen is not None else time.time(),
+        last_seen=last_seen,
     )
 
 
@@ -491,7 +491,6 @@ def main():
                 suppressed = last_seen is not None and (now - last_seen) < DEBOUNCE_SECONDS
                 mac_last_seen[mac] = now
 
-                # Live roster updates on every detection, before vendor/nmap.
                 apply_packet_to_roster(roster, packet, last_seen=now)
 
                 packet["vendor"] = lookup_vendor(mac)
