@@ -19,39 +19,149 @@ USER_CONFIG_FILE = Path(__file__).parent / "config.json"
 
 class ConfigModel(BaseModel):
     # Telegram credentials: secrets, so they only ever live in config.json.
-    bot_token: Optional[str] = None
-    chat_id: Optional[str] = None
+    bot_token: Optional[str] = Field(
+        default=None,
+        description="Telegram bot token from @BotFather. Alerts stay off until "
+        "this and chat_id are both set.",
+    )
+    chat_id: Optional[str] = Field(
+        default=None,
+        description="Telegram chat the alerts are sent to. Must be set together "
+        "with bot_token.",
+    )
 
     # Alerting
-    ignored_hostnames: List[str] = Field(default_factory=list)
-    ignored_macs: List[str] = Field(default_factory=list)
-    alert_on_message_types: List[str] = Field(default_factory=lambda: ["Discover"])
-    location: Optional[str] = None
+    ignored_hostnames: List[str] = Field(
+        default_factory=list,
+        description="Hostnames that never raise a Telegram alert, matched "
+        "case-insensitively against the whole name. Logging is unaffected.",
+    )
+    ignored_macs: List[str] = Field(
+        default_factory=list,
+        description="MAC addresses that never raise a Telegram alert, matched "
+        "case-insensitively (e.g. 'f0:81:73:61:ec:0c'). Logging is unaffected.",
+    )
+    alert_on_message_types: List[str] = Field(
+        default_factory=lambda: ["Discover"],
+        description="DHCP message types worth an alert: 'Discover' (a device "
+        "looking for a lease, i.e. usually new or returning) and/or 'Request' "
+        "(includes routine lease renewals, so it is far chattier).",
+    )
+    location: Optional[str] = Field(
+        default=None,
+        description="Label prefixed to every alert, e.g. 'Home'. When unset, the "
+        "approximate city from geolocation_lookup_host is used instead.",
+    )
 
     # Capture
-    log_file: str = "/tmp/dhcp_watch.log"
-    interface: str = "any"
-    tcpdump_command: str = "tcpdump"
-    debounce_seconds: int = 600
+    log_file: str = Field(
+        default="/tmp/dhcp_watch.log",
+        description="Append-only log of detected packets, also read back on "
+        "startup to seed the live roster. Note that /tmp is often cleared on "
+        "reboot.",
+    )
+    interface: str = Field(
+        default="any",
+        description="Interface tcpdump captures on; 'any' listens on all of them. "
+        "Set a specific one (e.g. 'eth0') to avoid duplicate packets on a host "
+        "with several interfaces on the same LAN.",
+    )
+    tcpdump_command: str = Field(
+        default="tcpdump",
+        description="tcpdump executable, resolved on PATH unless given as an "
+        "absolute path.",
+    )
+    debounce_seconds: int = Field(
+        default=600,
+        description="Per-MAC quiet window after a packet is handled. Repeats "
+        "inside it still print to the console, but are not logged and raise no "
+        "alert, which keeps chatty devices from flooding the chat.",
+    )
 
     # Live roster / web UI
-    quiet_period_seconds: int = 600
-    aging_sweep_interval_seconds: float = 5
-    web_bind_host: str = "0.0.0.0"
-    web_port: int = Field(default=8888, ge=0, le=65535)
-    sse_heartbeat_seconds: float = 15
+    quiet_period_seconds: int = Field(
+        default=600,
+        description="How long a host stays on the live hosts page after its last "
+        "DHCP activity. Also shown on the page itself as the drop-off window.",
+    )
+    aging_sweep_interval_seconds: float = Field(
+        default=5,
+        description="How often the background sweep drops expired hosts, so the "
+        "page ages entries out even while the LAN is silent. Lower means a "
+        "crisper drop-off, at the cost of more wakeups.",
+    )
+    web_bind_host: str = Field(
+        default="0.0.0.0",
+        description="Address the live hosts page binds to. The default accepts "
+        "connections on every interface; '127.0.0.1' restricts it to this host. "
+        "The page is unauthenticated, so keep it on a trusted LAN.",
+    )
+    web_port: int = Field(
+        default=8888,
+        ge=0,
+        le=65535,
+        description="TCP port for the live hosts page. Startup fails if it is "
+        "already taken.",
+    )
+    sse_heartbeat_seconds: float = Field(
+        default=15,
+        description="Interval between keep-alive events on the page's SSE stream, "
+        "which stops idle connections being closed by proxies or browsers.",
+    )
 
     # Outbound lookups
-    http_user_agent: str = "dhcp-watch/1.0"
-    telegram_api_base_url: str = "https://api.telegram.org"
-    telegram_timeout_seconds: float = 10
-    mac_vendor_api_base_url: str = "https://api.macvendors.com"
-    vendor_lookup_timeout_seconds: float = 5
-    external_ip_lookup_host: str = "ifconfig.me"
-    geolocation_lookup_host: str = "ipinfo.io"
-    external_lookup_timeout_seconds: float = 5
-    nmap_timeout_seconds: float = 30
-    nmap_port_device_map: Dict[int, str] = Field(default_factory=dict)
+    http_user_agent: str = Field(
+        default="dhcp-watch/1.0",
+        description="User-Agent sent with MAC vendor lookups.",
+    )
+    telegram_api_base_url: str = Field(
+        default="https://api.telegram.org",
+        description="Base URL of the Telegram Bot API. Worth changing only for a "
+        "proxy or a test double.",
+    )
+    telegram_timeout_seconds: float = Field(
+        default=10,
+        description="Timeout for a single Telegram send. A timed-out alert is "
+        "reported on stderr and dropped, never retried.",
+    )
+    mac_vendor_api_base_url: str = Field(
+        default="https://api.macvendors.com",
+        description="Base URL of the MAC vendor lookup API, queried once per OUI "
+        "(the first three octets of a MAC) and then cached in memory.",
+    )
+    vendor_lookup_timeout_seconds: float = Field(
+        default=5,
+        description="Timeout for a vendor lookup. On failure the device is "
+        "reported without a vendor, which then triggers the nmap probe.",
+    )
+    external_ip_lookup_host: str = Field(
+        default="ifconfig.me",
+        description="Host curl asks for this machine's external IPv4 and IPv6, "
+        "shown at startup and in the Telegram startup message.",
+    )
+    geolocation_lookup_host: str = Field(
+        default="ipinfo.io",
+        description="Host queried for approximate city/country/coordinates when "
+        "location is unset. Expected to answer with JSON.",
+    )
+    external_lookup_timeout_seconds: float = Field(
+        default=5,
+        description="Timeout shared by the external IP and geolocation lookups. "
+        "Both run once at startup and are skipped on failure.",
+    )
+    nmap_timeout_seconds: float = Field(
+        default=30,
+        description="Timeout for the nmap probe. It runs an OS scan, so allow "
+        "generous time or accept that slower devices go unidentified.",
+    )
+    nmap_port_device_map: Dict[int, str] = Field(
+        default_factory=dict,
+        description="Open TCP port to device label, e.g. {\"62078\": "
+        "\"iPhone/iPad\"}. These ports are the ones nmap scans, and the first "
+        "match names the device; otherwise the OS fingerprint decides. Only "
+        "consulted when the vendor lookup came up empty, typically for a device "
+        "using a randomised MAC.",
+    )
 
     @property
     def telegram_enabled(self) -> bool:
