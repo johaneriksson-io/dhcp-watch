@@ -3,8 +3,16 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from config_validator import ConfigModel, load_and_validate_config
+from config_validator import (
+    DEFAULT_CONFIG_FILE,
+    ConfigModel,
+    load_and_validate_config,
+    load_defaults,
+)
+import dhcp_watch
 from dhcp_watch import (
+    lookup_vendor,
+    probe_device_type,
     is_hostname_ignored,
     is_mac_ignored,
     send_telegram_alert,
@@ -65,10 +73,29 @@ class TestConfigModel:
             ConfigModel(bot_token="", chat_id="456")
 
 
+class TestConfigDefaultsFile:
+    def test_default_file_is_present_and_valid(self):
+        assert DEFAULT_CONFIG_FILE.is_file()
+        defaults = load_defaults()
+        assert defaults.web_port == 8888
+        assert defaults.quiet_period_seconds == 600
+        assert defaults.log_file == "/tmp/dhcp_watch.log"
+        assert defaults.interface == "any"
+        assert defaults.alert_on_message_types == ["Discover"]
+        assert defaults.nmap_port_device_map[62078] == "iPhone/iPad"
+
+    def test_defaults_carry_no_credentials(self):
+        defaults = load_defaults()
+        assert defaults.bot_token is None
+        assert defaults.chat_id is None
+        assert defaults.telegram_enabled is False
+
+
 class TestLoadAndValidateConfig:
-    def test_missing_file(self, tmp_path):
+    def test_missing_user_file_falls_back_to_defaults(self, tmp_path):
         result = load_and_validate_config(tmp_path / "nonexistent.json")
-        assert result is None
+        assert result.web_port == load_defaults().web_port
+        assert result.telegram_enabled is False
 
     def test_valid_file(self, tmp_path):
         cfg = tmp_path / "config.json"
@@ -77,18 +104,42 @@ class TestLoadAndValidateConfig:
         assert result is not None
         assert result.bot_token == "tok"
         assert result.chat_id == "cid"
+        assert result.telegram_enabled is True
 
-    def test_invalid_json(self, tmp_path):
+    def test_user_file_overrides_defaults(self, tmp_path):
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps({"web_port": 9999, "interface": "eth0"}))
+        result = load_and_validate_config(cfg)
+        assert result.web_port == 9999
+        assert result.interface == "eth0"
+        # Untouched keys still come from the defaults layer.
+        assert result.log_file == load_defaults().log_file
+
+    def test_user_file_replaces_list_defaults_wholesale(self, tmp_path):
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps({"alert_on_message_types": ["Request", "Discover"]}))
+        result = load_and_validate_config(cfg)
+        assert result.alert_on_message_types == ["Request", "Discover"]
+
+    def test_defaults_layer_is_read_when_user_file_absent(self, tmp_path):
+        defaults = tmp_path / "config.default.json"
+        defaults.write_text(json.dumps({"web_port": 7070}))
+        result = load_and_validate_config(tmp_path / "nope.json", defaults)
+        assert result.web_port == 7070
+
+    def test_invalid_json_falls_back_to_defaults(self, tmp_path, capsys):
         cfg = tmp_path / "config.json"
         cfg.write_text("{bad json")
         result = load_and_validate_config(cfg)
-        assert result is None
+        assert result.web_port == load_defaults().web_port
+        assert "Error reading" in capsys.readouterr().err
 
-    def test_missing_required_fields(self, tmp_path):
+    def test_partial_credentials_fall_back_to_defaults(self, tmp_path, capsys):
         cfg = tmp_path / "config.json"
         cfg.write_text(json.dumps({"bot_token": "tok"}))
         result = load_and_validate_config(cfg)
-        assert result is None
+        assert result.telegram_enabled is False
+        assert "Error loading configuration" in capsys.readouterr().err
 
 
 # --- is_hostname_ignored tests ---
@@ -299,9 +350,67 @@ class TestLoadConfig:
         assert result.bot_token == "t"
         mock_validate.assert_called_once()
 
-    @patch("dhcp_watch.load_and_validate_config", return_value=None)
-    def test_returns_none_when_no_config(self, mock_validate):
-        assert load_config() is None
+    def test_returns_defaults_without_credentials(self):
+        config = load_config()
+        assert config.web_port == load_defaults().web_port
+        assert config.log_file == load_defaults().log_file
+
+
+# --- configuration drives runtime behaviour ---
+
+
+class TestConfigDrivenLookups:
+    def test_external_ip_uses_configured_host_and_timeout(self):
+        config = ConfigModel(external_ip_lookup_host="example.test", external_lookup_timeout_seconds=7)
+        with patch("dhcp_watch.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="1.2.3.4")
+            get_external_ip(config=config)
+        cmd = mock_run.call_args[0][0]
+        assert "example.test" in cmd
+        assert cmd[cmd.index("-m") + 1] == "7"
+        assert mock_run.call_args[1]["timeout"] == 7 + dhcp_watch.SUBPROCESS_TIMEOUT_MARGIN_SECONDS
+
+    def test_geolocation_uses_configured_host(self):
+        config = ConfigModel(geolocation_lookup_host="geo.test")
+        with patch("dhcp_watch.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout='{"city": "Ankeborg"}')
+            assert get_geolocation(config=config)["city"] == "Ankeborg"
+        assert "geo.test" in mock_run.call_args[0][0]
+
+    def test_vendor_lookup_uses_configured_api_and_user_agent(self):
+        config = ConfigModel(
+            mac_vendor_api_base_url="https://vendors.test",
+            http_user_agent="dhcp-watch/test",
+            vendor_lookup_timeout_seconds=3,
+        )
+        dhcp_watch._vendor_cache.clear()
+        with patch("dhcp_watch.urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value.__enter__.return_value.read.return_value = b"Acme"
+            assert lookup_vendor("aa:bb:cc:dd:ee:ff", config) == "Acme"
+        request = mock_urlopen.call_args[0][0]
+        assert request.full_url.startswith("https://vendors.test/")
+        assert request.get_header("User-agent") == "dhcp-watch/test"
+        assert mock_urlopen.call_args[1]["timeout"] == 3
+        dhcp_watch._vendor_cache.clear()
+
+    def test_telegram_uses_configured_api_base_url(self):
+        config = ConfigModel(
+            bot_token="tok", chat_id="cid", telegram_api_base_url="https://tg.test"
+        )
+        with patch("dhcp_watch.urllib.request.urlopen") as mock_urlopen:
+            send_telegram_message(config, "hi")
+        assert mock_urlopen.call_args[0][0].full_url == "https://tg.test/bottok/sendMessage"
+
+    def test_device_probe_scans_configured_ports(self):
+        config = ConfigModel(nmap_port_device_map={4711: "Doohickey"}, nmap_timeout_seconds=12)
+        dhcp_watch._device_type_cache.clear()
+        with patch("dhcp_watch.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="4711/tcp open")
+            assert probe_device_type("192.168.1.5", config) == "Doohickey"
+        cmd = mock_run.call_args[0][0]
+        assert cmd[cmd.index("-p") + 1] == "4711"
+        assert mock_run.call_args[1]["timeout"] == 12
+        dhcp_watch._device_type_cache.clear()
 
 
 # --- live roster wiring ---

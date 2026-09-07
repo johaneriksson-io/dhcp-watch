@@ -1,0 +1,30 @@
+{
+  "log_file": "/tmp/dhcp_watch.log",
+  "interface": "any",
+  "tcpdump_command": "tcpdump",
+  "debounce_seconds": 600,
+  "quiet_period_seconds": 600,
+  "aging_sweep_interval_seconds": 5,
+  "alert_on_message_types": ["Discover"],
+  "ignored_hostnames": [],
+  "ignored_macs": [],
+  "location": null,
+  "web_bind_host": "0.0.0.0",
+  "web_port": 8888,
+  "sse_heartbeat_seconds": 15,
+  "http_user_agent": "dhcp-watch/1.0",
+  "telegram_api_base_url": "https://api.telegram.org",
+  "telegram_timeout_seconds": 10,
+  "mac_vendor_api_base_url": "https://api.macvendors.com",
+  "vendor_lookup_timeout_seconds": 5,
+  "external_ip_lookup_host": "ifconfig.me",
+  "geolocation_lookup_host": "ipinfo.io",
+  "external_lookup_timeout_seconds": 5,
+  "nmap_timeout_seconds": 30,
+  "nmap_port_device_map": {
+    "62078": "iPhone/iPad",
+    "7000": "AirPlay device",
+    "548": "Mac",
+    "5009": "Apple TV"
+  }
+}

@@ -8,11 +8,16 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
+from config_validator import load_defaults
 from host_roster import HostRoster
 
-DEFAULT_BIND_HOST = "0.0.0.0"
-DEFAULT_PORT = 8888
-SSE_HEARTBEAT_SECONDS = 15
+_DEFAULTS = load_defaults()
+DEFAULT_BIND_HOST = _DEFAULTS.web_bind_host
+DEFAULT_PORT = _DEFAULTS.web_port
+SSE_HEARTBEAT_SECONDS = _DEFAULTS.sse_heartbeat_seconds
+
+# Replaced with the roster's quiet period when the page is rendered.
+_QUIET_PERIOD_PLACEHOLDER = "__QUIET_PERIOD__"
 
 # Client disconnects while reading headers (common with EventSource reconnect /
 # aborted navigations) surface here before do_GET runs.
@@ -101,7 +106,7 @@ _PAGE_HTML = """<!DOCTYPE html>
     <h1>Live hosts</h1>
     <div id="status">Connecting…</div>
     <div id="loading">Loading roster…</div>
-    <div id="empty" class="hidden">No hosts seen in the last 1 hour.</div>
+    <div id="empty" class="hidden">No hosts seen in the last __QUIET_PERIOD__.</div>
     <ul id="hosts" class="hidden"></ul>
   </main>
   <script>
@@ -201,15 +206,39 @@ _PAGE_HTML = """<!DOCTYPE html>
 """
 
 
+def format_duration(seconds: float) -> str:
+    """Render a quiet period as the page phrases it, e.g. "10 minutes"."""
+    for size, unit in ((3600, "hour"), (60, "minute")):
+        if seconds >= size and seconds % size == 0:
+            count = int(seconds // size)
+            return f"{count} {unit}" if count == 1 else f"{count} {unit}s"
+    count = int(seconds)
+    return f"{count} second" if count == 1 else f"{count} seconds"
+
+
+def render_page(quiet_period_seconds: float) -> str:
+    """Fill the page template with values that come from configuration."""
+    return _PAGE_HTML.replace(
+        _QUIET_PERIOD_PLACEHOLDER, format_duration(quiet_period_seconds)
+    )
+
+
 class HostsHTTPServer(ThreadingHTTPServer):
     """Threading HTTP server that holds the shared roster and stop event."""
 
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, server_address, roster: HostRoster, stop_event: threading.Event):
+    def __init__(
+        self,
+        server_address,
+        roster: HostRoster,
+        stop_event: threading.Event,
+        heartbeat_seconds: float = SSE_HEARTBEAT_SECONDS,
+    ):
         self.roster = roster
         self.stop_event = stop_event
+        self.heartbeat_seconds = heartbeat_seconds
         super().__init__(server_address, HostsRequestHandler)
 
     def handle_error(self, request, client_address) -> None:
@@ -231,6 +260,10 @@ class HostsRequestHandler(BaseHTTPRequestHandler):
     def stop_event(self) -> threading.Event:
         return self.server.stop_event  # type: ignore[attr-defined]
 
+    @property
+    def heartbeat_seconds(self) -> float:
+        return self.server.heartbeat_seconds  # type: ignore[attr-defined]
+
     def log_message(self, format: str, *args) -> None:
         # Keep capture console clean; web access is operational noise.
         return
@@ -251,7 +284,7 @@ class HostsRequestHandler(BaseHTTPRequestHandler):
             self.send_error(404, "Not Found")
 
     def _serve_page(self) -> None:
-        body = _PAGE_HTML.encode("utf-8")
+        body = render_page(self.roster.quiet_period_seconds).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -270,7 +303,7 @@ class HostsRequestHandler(BaseHTTPRequestHandler):
         version = -1
         try:
             while not self.stop_event.is_set():
-                if version < 0 or self.roster.wait_for_change(version, timeout=SSE_HEARTBEAT_SECONDS):
+                if version < 0 or self.roster.wait_for_change(version, timeout=self.heartbeat_seconds):
                     version = self.roster.version
                     payload = {
                         "version": version,
@@ -292,13 +325,14 @@ def start_web_server(
     host: str = DEFAULT_BIND_HOST,
     port: int = DEFAULT_PORT,
     stop_event: threading.Event | None = None,
+    heartbeat_seconds: float = SSE_HEARTBEAT_SECONDS,
 ) -> tuple[HostsHTTPServer, threading.Thread, threading.Event]:
     """Bind and start the HTTP server in a daemon thread.
 
     Raises OSError on bind failure.
     """
     event = stop_event or threading.Event()
-    httpd = HostsHTTPServer((host, port), roster, event)
+    httpd = HostsHTTPServer((host, port), roster, event, heartbeat_seconds=heartbeat_seconds)
     thread = threading.Thread(target=httpd.serve_forever, name="dhcp-watch-web", daemon=True)
     thread.start()
     return httpd, thread, event

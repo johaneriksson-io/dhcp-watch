@@ -3,6 +3,7 @@
 import threading
 import time
 
+from config_validator import load_defaults
 from host_roster import UNKNOWN_MAC, HostRoster, QUIET_PERIOD_SECONDS
 
 
@@ -134,5 +135,6 @@ class TestHostRosterWaitNotify:
 
         assert woke == [True]
 
-    def test_quiet_period_default_matches_debounce(self):
-        assert QUIET_PERIOD_SECONDS == 600
+    def test_quiet_period_default_comes_from_config(self):
+        assert QUIET_PERIOD_SECONDS == load_defaults().quiet_period_seconds
+        assert HostRoster().quiet_period_seconds == QUIET_PERIOD_SECONDS

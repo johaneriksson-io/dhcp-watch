@@ -37,6 +37,10 @@ Edit `config.json`:
 }
 ```
 
+`config.json` only needs the keys you want to change — everything else comes
+from the checked-in `config.default.json`. See the Configuration section of the
+[README](README.md).
+
 ## 4. Test
 
 Verify your setup with:

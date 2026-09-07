@@ -9,9 +9,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from config_validator import load_defaults
+
 UNKNOWN_MAC = "unknown"
 UNKNOWN_VALUE = "unknown"
-QUIET_PERIOD_SECONDS = 600
+QUIET_PERIOD_SECONDS = load_defaults().quiet_period_seconds
 
 _LOG_TIMESTAMP = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*\|")
 _LOG_HOST = re.compile(r"Host:\s*([^\|]+)")
@@ -63,7 +65,7 @@ def seed_roster_from_log(
         return 0
 
     quiet = (
-        roster._quiet_period_seconds
+        roster.quiet_period_seconds
         if quiet_period_seconds is None
         else quiet_period_seconds
     )
@@ -98,6 +100,10 @@ class HostRoster:
         self._version = 0
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
+
+    @property
+    def quiet_period_seconds(self) -> int:
+        return self._quiet_period_seconds
 
     @property
     def version(self) -> int:

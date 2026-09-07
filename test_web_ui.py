@@ -12,7 +12,7 @@ from http.client import HTTPConnection
 import pytest
 
 from host_roster import HostRoster
-from web_ui import start_web_server, stop_web_server
+from web_ui import format_duration, render_page, start_web_server, stop_web_server
 
 
 @pytest.fixture
@@ -61,8 +61,32 @@ class TestWebPage:
         assert "text/html" in response.headers.get("Content-Type", "")
         assert "EventSource" in body
         assert "/events" in body
-        assert "No hosts seen in the last 1 hour." in body
+        assert "No hosts seen in the last 10 minutes." in body
         assert "textContent" in body
+
+
+class TestPageRendering:
+    def test_empty_message_follows_configured_quiet_period(self):
+        assert "No hosts seen in the last 1 hour." in render_page(3600)
+        assert "No hosts seen in the last 30 minutes." in render_page(1800)
+
+    def test_format_duration_units(self):
+        assert format_duration(3600) == "1 hour"
+        assert format_duration(600) == "10 minutes"
+        assert format_duration(60) == "1 minute"
+        assert format_duration(45) == "45 seconds"
+
+
+class TestHeartbeatConfig:
+    def test_heartbeat_seconds_reaches_the_server(self):
+        roster = HostRoster()
+        httpd, _thread, stop_event = start_web_server(
+            roster, host="127.0.0.1", port=0, heartbeat_seconds=1.5
+        )
+        try:
+            assert httpd.heartbeat_seconds == 1.5
+        finally:
+            stop_web_server(httpd, stop_event)
 
 
 class TestSSE:

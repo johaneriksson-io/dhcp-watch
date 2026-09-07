@@ -15,33 +15,24 @@ import os
 import threading
 import urllib.request
 import urllib.parse
-from pathlib import Path
 from datetime import datetime
-from config_validator import load_and_validate_config
-from host_roster import HostRoster, QUIET_PERIOD_SECONDS, seed_roster_from_log
-from web_ui import (
-    DEFAULT_BIND_HOST,
-    DEFAULT_PORT,
-    start_web_server,
-    stop_web_server,
+from config_validator import (
+    USER_CONFIG_FILE,
+    load_and_validate_config,
+    load_defaults,
 )
+from host_roster import HostRoster, seed_roster_from_log
+from web_ui import start_web_server, stop_web_server
 
-LOG_FILE = "/tmp/dhcp_watch.log"
-DEBOUNCE_SECONDS = QUIET_PERIOD_SECONDS
-INTERFACE = "any"
-TCPDUMP_CMD = "tcpdump"
-CONFIG_FILE = Path(__file__).parent / "config.json"
+# Protocol vocabulary and display constants; everything tunable lives in
+# config.default.json (overridable per host in config.json).
 MSG_TYPE_REQUEST = "Request"
 MSG_TYPE_DISCOVER = "Discover"
 UNKNOWN_VALUE = "unknown"
-HTTP_USER_AGENT = "dhcp-watch/1.0"
-MAC_VENDOR_API_BASE_URL = "https://api.macvendors.com"
-TELEGRAM_API_BASE_URL = "https://api.telegram.org"
-EXTERNAL_IP_LOOKUP_HOST = "ifconfig.me"
-GEOLOCATION_LOOKUP_HOST = "ipinfo.io"
-WEB_BIND_HOST = DEFAULT_BIND_HOST
-WEB_PORT = DEFAULT_PORT
-AGING_SWEEP_INTERVAL_SECONDS = 5
+
+# Grace added on top of a lookup's own timeout before the subprocess is killed,
+# so curl gets the chance to time out and exit cleanly first.
+SUBPROCESS_TIMEOUT_MARGIN_SECONDS = 5
 
 # Cache OUI prefix -> vendor name to avoid repeated API calls
 _vendor_cache = {}
@@ -49,29 +40,23 @@ _vendor_cache = {}
 # Cache IP -> device type to avoid repeated nmap probes
 _device_type_cache = {}
 
-# Ports that reliably identify device types
-_NMAP_PORT_DEVICE_MAP = {
-    62078: "iPhone/iPad",   # iphone-sync (Apple wireless sync)
-    7000: "AirPlay device", # Apple AirPlay
-    548: "Mac",             # Apple Filing Protocol
-    5009: "Apple TV",       # Apple TV remote
-}
 
-
-def probe_device_type(ip):
+def probe_device_type(ip, config=None):
     """Use nmap to guess device type from open ports and OS fingerprint.
 
     Only called when MAC vendor lookup fails (e.g. randomised MAC).
     Results are cached by IP.
     """
+    config = config or load_defaults()
     if not ip or ip == UNKNOWN_VALUE:
         return None
     if ip in _device_type_cache:
         return _device_type_cache[ip]
 
+    port_device_map = config.nmap_port_device_map
     device_type = None
     try:
-        ports = ",".join(str(p) for p in _NMAP_PORT_DEVICE_MAP)
+        ports = ",".join(str(p) for p in port_device_map)
         result = subprocess.run(
             [
                 "nmap", "-Pn", "-O", "--osscan-guess",
@@ -81,12 +66,12 @@ def probe_device_type(ip):
             ],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=config.nmap_timeout_seconds,
         )
         output = result.stdout
 
         # Port matches are most reliable
-        for port, dtype in _NMAP_PORT_DEVICE_MAP.items():
+        for port, dtype in port_device_map.items():
             if f"{port}/tcp" in output:
                 device_type = dtype
                 break
@@ -116,21 +101,22 @@ def probe_device_type(ip):
     return device_type
 
 
-def lookup_vendor(mac):
+def lookup_vendor(mac, config=None):
     """Look up the vendor for a MAC address using macvendors.com API.
 
     Caches results by OUI prefix (first 3 octets) so devices from the
     same manufacturer share a single lookup.
     """
+    config = config or load_defaults()
     if not mac or mac == UNKNOWN_VALUE:
         return None
     oui = mac[:8].upper()  # e.g. "F0:81:73"
     if oui in _vendor_cache:
         return _vendor_cache[oui]
     try:
-        url = f"{MAC_VENDOR_API_BASE_URL}/{urllib.parse.quote(oui)}"
-        req = urllib.request.Request(url, headers={"User-Agent": HTTP_USER_AGENT})
-        with urllib.request.urlopen(req, timeout=5) as response:
+        url = f"{config.mac_vendor_api_base_url}/{urllib.parse.quote(oui)}"
+        req = urllib.request.Request(url, headers={"User-Agent": config.http_user_agent})
+        with urllib.request.urlopen(req, timeout=config.vendor_lookup_timeout_seconds) as response:
             vendor = response.read().decode().strip()
     except Exception:
         vendor = None
@@ -259,20 +245,20 @@ def format_output(packet_info, suppressed=False, use_color=False):
 
 
 def load_config():
-    """Load and validate Telegram configuration from config file."""
-    return load_and_validate_config(CONFIG_FILE)
+    """Load config.default.json, then apply config.json overrides on top."""
+    return load_and_validate_config(USER_CONFIG_FILE)
 
 
 def send_telegram_message(config, text):
     """Send a raw text and message via Telegram."""
-    url = f"{TELEGRAM_API_BASE_URL}/bot{config.bot_token}/sendMessage"
+    url = f"{config.telegram_api_base_url}/bot{config.bot_token}/sendMessage"
     data = urllib.parse.urlencode({
         "chat_id": config.chat_id,
         "text": text,
     }).encode()
     try:
         req = urllib.request.Request(url, data=data)
-        urllib.request.urlopen(req, timeout=10)
+        urllib.request.urlopen(req, timeout=config.telegram_timeout_seconds)
     except Exception as e:
         print(f"Failed to send Telegram message: {e}", file=sys.stderr)
 
@@ -306,14 +292,21 @@ def send_telegram_alert(config, packet_info, location=None):
 
     send_telegram_message(config, message)
 
-def get_external_ip(ipv6=False):
-    """Fetch external IP address using ifconfig.me."""
+def get_external_ip(ipv6=False, config=None):
+    """Fetch external IP address from the configured lookup host."""
+    config = config or load_defaults()
+    timeout = config.external_lookup_timeout_seconds
     try:
-        cmd = ["curl", "-s", "-m", "5"]
+        cmd = ["curl", "-s", "-m", str(int(timeout))]
         if not ipv6:
             cmd.append("-4")
-        cmd.append(EXTERNAL_IP_LOOKUP_HOST)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        cmd.append(config.external_ip_lookup_host)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout + SUBPROCESS_TIMEOUT_MARGIN_SECONDS,
+        )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
     except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -321,11 +314,18 @@ def get_external_ip(ipv6=False):
     return None
 
 
-def get_geolocation():
-    """Fetch geolocation info using ipinfo.io."""
+def get_geolocation(config=None):
+    """Fetch geolocation info from the configured lookup host."""
+    config = config or load_defaults()
+    timeout = config.external_lookup_timeout_seconds
     try:
-        cmd = ["curl", "-s", "-m", "5", GEOLOCATION_LOOKUP_HOST]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        cmd = ["curl", "-s", "-m", str(int(timeout)), config.geolocation_lookup_host]
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout + SUBPROCESS_TIMEOUT_MARGIN_SECONDS,
+        )
         if result.returncode == 0 and result.stdout.strip():
             return json.loads(result.stdout)
     except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
@@ -363,8 +363,10 @@ def apply_packet_to_roster(roster, packet, last_seen=None):
     )
 
 
-def start_aging_sweep(roster, stop_event, interval_seconds=AGING_SWEEP_INTERVAL_SECONDS):
+def start_aging_sweep(roster, stop_event, interval_seconds=None):
     """Background timer that ages hosts out even when the LAN is idle."""
+    if interval_seconds is None:
+        interval_seconds = load_defaults().aging_sweep_interval_seconds
 
     def _loop():
         while not stop_event.wait(interval_seconds):
@@ -379,27 +381,29 @@ def main():
     """Main entry point."""
     config = load_config()
     mac_last_seen = {}  # Track last alert time per MAC for debouncing
-    ignored_hostnames = config.ignored_hostnames if config else []
-    ignored_macs = config.ignored_macs if config else []
-    roster = HostRoster(quiet_period_seconds=QUIET_PERIOD_SECONDS)
+    ignored_hostnames = config.ignored_hostnames
+    ignored_macs = config.ignored_macs
+    debounce_seconds = config.debounce_seconds
+    log_file_path = config.log_file
+    roster = HostRoster(quiet_period_seconds=config.quiet_period_seconds)
     web_stop_event = threading.Event()
     httpd = None
 
-    print(f"Starting DHCP watch on interface '{INTERFACE}'...")
-    print(f"Logging to: {LOG_FILE}")
-    print(f"Debounce: {DEBOUNCE_SECONDS}s per MAC")
-    if config:
+    print(f"Starting DHCP watch on interface '{config.interface}'...")
+    print(f"Logging to: {log_file_path}")
+    print(f"Debounce: {debounce_seconds}s per MAC")
+    if config.telegram_enabled:
         print("Telegram alerts: enabled")
         if ignored_hostnames:
             print(f"Ignored hostnames: {', '.join(ignored_hostnames)}")
         if ignored_macs:
             print(f"Ignored MACs: {', '.join(ignored_macs)}")
     else:
-        print(f"Telegram alerts: disabled (configure in {CONFIG_FILE})")
+        print(f"Telegram alerts: disabled (configure in {USER_CONFIG_FILE})")
 
     # Display external IP addresses and geolocation
-    ext_ipv4 = get_external_ip(ipv6=False)
-    ext_ipv6 = get_external_ip(ipv6=True)
+    ext_ipv4 = get_external_ip(ipv6=False, config=config)
+    ext_ipv6 = get_external_ip(ipv6=True, config=config)
     if ext_ipv4:
         print(f"External IPv4: {ext_ipv4}")
     if ext_ipv6:
@@ -407,11 +411,11 @@ def main():
 
     # Prefer a manually configured location; the geo IP lookup is approximate.
     location = None
-    if config and config.location:
+    if config.location:
         location = config.location
         print(f"Location: {location} (from config)")
     else:
-        geo = get_geolocation()
+        geo = get_geolocation(config=config)
         if geo:
             city = geo.get("city", UNKNOWN_VALUE)
             country = geo.get("country", UNKNOWN_VALUE)
@@ -419,31 +423,34 @@ def main():
             location = f"{city}, {country} ({loc})"
             print(f"Location: {location}")
 
-    seeded = seed_roster_from_log(roster, LOG_FILE)
+    seeded = seed_roster_from_log(roster, log_file_path)
     print(f"Live roster seed: {seeded} host(s) from log")
 
+    bind_host = config.web_bind_host
+    web_port = config.web_port
     try:
         httpd, _web_thread, web_stop_event = start_web_server(
             roster,
-            host=WEB_BIND_HOST,
-            port=WEB_PORT,
+            host=bind_host,
+            port=web_port,
             stop_event=web_stop_event,
+            heartbeat_seconds=config.sse_heartbeat_seconds,
         )
     except OSError as e:
-        print(f"Error: failed to bind web UI on {WEB_BIND_HOST}:{WEB_PORT}: {e}", file=sys.stderr)
+        print(f"Error: failed to bind web UI on {bind_host}:{web_port}: {e}", file=sys.stderr)
         sys.exit(1)
 
     print(
-        f"Live hosts page: http://<this-host>:{WEB_PORT}/ "
-        f"(bound {WEB_BIND_HOST}:{WEB_PORT}, unauthenticated LAN access)"
+        f"Live hosts page: http://<this-host>:{web_port}/ "
+        f"(bound {bind_host}:{web_port}, unauthenticated LAN access)"
     )
     print(
         "Note: the web UI runs in this process (often as root for capture); "
         "prefer tcpdump capabilities and host firewall limits when possible."
     )
-    start_aging_sweep(roster, web_stop_event)
+    start_aging_sweep(roster, web_stop_event, config.aging_sweep_interval_seconds)
 
-    if config:
+    if config.telegram_enabled:
         startup_lines = ["DHCP Watch started"]
         if ext_ipv4:
             startup_lines.append(f"IPv4: {ext_ipv4}")
@@ -451,14 +458,14 @@ def main():
             startup_lines.append(f"IPv6: {ext_ipv6}")
         if location:
             startup_lines.append(f"Location: {location}")
-        startup_lines.append(f"Live hosts: port {WEB_PORT}")
+        startup_lines.append(f"Live hosts: port {web_port}")
         send_telegram_message(config, "\n".join(startup_lines))
 
     print("Press Ctrl+C to stop.\n")
 
     cmd = [
-        TCPDUMP_CMD,
-        "-i", INTERFACE,
+        config.tcpdump_command,
+        "-i", config.interface,
         "port", "67", "or", "port", "68",
         "-p",  # No promiscuous mode (not needed for DHCP, avoids warning on 'any')
         "-n",
@@ -483,19 +490,19 @@ def main():
             bufsize=1,
         )
 
-        with open(LOG_FILE, "a") as log_file:
+        with open(log_file_path, "a") as log_file:
             for packet in parse_tcpdump_output(process):
                 mac = packet["mac"]
                 now = time.time()
                 last_seen = mac_last_seen.get(mac)
-                suppressed = last_seen is not None and (now - last_seen) < DEBOUNCE_SECONDS
+                suppressed = last_seen is not None and (now - last_seen) < debounce_seconds
                 mac_last_seen[mac] = now
 
                 apply_packet_to_roster(roster, packet, last_seen=now)
 
-                packet["vendor"] = lookup_vendor(mac)
+                packet["vendor"] = lookup_vendor(mac, config)
                 if not packet["vendor"] and packet["ip"] != UNKNOWN_VALUE:
-                    packet["device_type"] = probe_device_type(packet["ip"])
+                    packet["device_type"] = probe_device_type(packet["ip"], config)
                 else:
                     packet["device_type"] = None
                 output = format_output(packet, suppressed=suppressed, use_color=True)
@@ -507,7 +514,7 @@ def main():
                 log_file.write(format_output(packet, use_color=False) + "\n")
                 log_file.flush()
 
-                if config and packet["msg_type"] in [MSG_TYPE_DISCOVER]:
+                if config.telegram_enabled and packet["msg_type"] in config.alert_on_message_types:
                     if not is_hostname_ignored(packet["hostname"], ignored_hostnames) and \
                             not is_mac_ignored(packet["mac"], ignored_macs):
                         send_telegram_alert(config, packet, location=location)
