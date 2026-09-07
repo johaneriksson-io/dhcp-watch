@@ -40,6 +40,36 @@ class TestHostRosterUpsert:
         assert hosts[0]["ip"] == "192.168.1.10"
         assert hosts[0]["last_seen"] == 1100.0
 
+    def test_vendor_stored_and_kept_when_a_later_packet_omits_it(self):
+        roster = HostRoster()
+        roster.upsert("aa:bb:cc:dd:ee:ff", "phone", "192.168.1.10", last_seen=1000.0)
+        assert roster.snapshot()[0]["vendor"] is None
+
+        roster.upsert(
+            "aa:bb:cc:dd:ee:ff", "phone", "192.168.1.10", last_seen=1000.0,
+            vendor="Apple, Inc.",
+        )
+        assert roster.snapshot()[0]["vendor"] == "Apple, Inc."
+
+        # The next packet is recorded before its vendor lookup answers.
+        roster.upsert("aa:bb:cc:dd:ee:ff", "phone", "192.168.1.10", last_seen=1100.0)
+        hosts = roster.snapshot()
+        assert hosts[0]["vendor"] == "Apple, Inc."
+        assert hosts[0]["last_seen"] == 1100.0
+
+    def test_vendor_replaced_when_a_new_one_is_known(self):
+        roster = HostRoster()
+        roster.upsert("aa:bb:cc:dd:ee:ff", "phone", "1.1.1.1", last_seen=1000.0, vendor="Old")
+        roster.upsert("aa:bb:cc:dd:ee:ff", "phone", "1.1.1.1", last_seen=1100.0, vendor="New")
+        assert roster.snapshot()[0]["vendor"] == "New"
+
+    def test_blank_and_unknown_vendor_do_not_become_a_label(self):
+        roster = HostRoster()
+        roster.upsert("aa:bb:cc:dd:ee:ff", "phone", "1.1.1.1", last_seen=1000.0, vendor="unknown")
+        assert roster.snapshot()[0]["vendor"] is None
+        roster.upsert("aa:bb:cc:dd:ee:ff", "phone", "1.1.1.1", last_seen=1000.0, vendor="   ")
+        assert roster.snapshot()[0]["vendor"] is None
+
     def test_mac_normalized_to_lowercase(self):
         roster = HostRoster()
         roster.upsert("AA:BB:CC:DD:EE:FF", "phone", "192.168.1.10", last_seen=1000.0)

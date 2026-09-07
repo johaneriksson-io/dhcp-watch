@@ -94,6 +94,10 @@ _PAGE_HTML = """<!DOCTYPE html>
       flex-wrap: wrap;
       gap: 0.35rem 0.85rem;
     }
+    .vendor {
+      color: var(--ink);
+      font-weight: 500;
+    }
     #empty, #loading {
       color: var(--muted);
       padding: 1rem 0;
@@ -163,6 +167,12 @@ _PAGE_HTML = """<!DOCTYPE html>
         const mac = document.createElement("span");
         mac.textContent = host.mac || "";
         meta.appendChild(seen);
+        if (host.vendor && host.vendor !== "unknown") {
+          const vendor = document.createElement("span");
+          vendor.className = "vendor";
+          vendor.textContent = host.vendor;
+          meta.appendChild(vendor);
+        }
         if (host.hostname && host.hostname !== "unknown" && host.mac) {
           meta.appendChild(mac);
         }

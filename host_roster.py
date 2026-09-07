@@ -18,7 +18,7 @@ QUIET_PERIOD_SECONDS = load_defaults().quiet_period_seconds
 _LOG_TIMESTAMP = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*\|")
 _LOG_HOST = re.compile(r"Host:\s*([^\|]+)")
 _LOG_IP = re.compile(r"IP:\s*([^\|]+)")
-_LOG_MAC = re.compile(r"MAC:\s*([0-9a-fA-F:]+)(?:\s*\([^)]*\))?")
+_LOG_MAC = re.compile(r"MAC:\s*([0-9a-fA-F:]+)(?:\s*\(([^)]*)\))?")
 
 
 def parse_log_line(line: str) -> dict[str, Any] | None:
@@ -39,10 +39,12 @@ def parse_log_line(line: str) -> dict[str, Any] | None:
     ip_match = _LOG_IP.search(line)
     hostname = host_match.group(1).strip() if host_match else UNKNOWN_VALUE
     ip = ip_match.group(1).strip() if ip_match else UNKNOWN_VALUE
+    vendor = (mac_match.group(2) or "").strip()
     return {
         "mac": mac_match.group(1).lower(),
         "hostname": hostname or UNKNOWN_VALUE,
         "ip": ip or UNKNOWN_VALUE,
+        "vendor": vendor or None,
         "last_seen": last_seen,
     }
 
@@ -116,8 +118,15 @@ class HostRoster:
         hostname: str | None,
         ip: str | None,
         last_seen: float | None = None,
+        vendor: str | None = None,
     ) -> bool:
-        """Insert or update a host. Returns False if MAC is unusable."""
+        """Insert or update a host. Returns False if MAC is unusable.
+
+        `vendor` is the manufacturer (or, failing that, the probed device type).
+        It arrives later than the rest of the identity because the lookups run
+        after the packet is recorded, so a known value is kept until a new
+        known one replaces it.
+        """
         normalized_mac = self._normalize_mac(mac)
         if normalized_mac is None:
             return False
@@ -125,6 +134,9 @@ class HostRoster:
         seen_at = time.time() if last_seen is None else last_seen
         hostname = hostname or UNKNOWN_VALUE
         ip = ip or UNKNOWN_VALUE
+        vendor = vendor.strip() if vendor else None
+        if vendor == UNKNOWN_VALUE:
+            vendor = None
 
         with self._condition:
             existing = self._hosts.get(normalized_mac)
@@ -133,6 +145,7 @@ class HostRoster:
                     "mac": normalized_mac,
                     "hostname": hostname,
                     "ip": ip,
+                    "vendor": vendor,
                     "last_seen": seen_at,
                 }
             else:
@@ -140,6 +153,8 @@ class HostRoster:
                     existing["hostname"] = hostname
                 if ip != UNKNOWN_VALUE:
                     existing["ip"] = ip
+                if vendor:
+                    existing["vendor"] = vendor
                 existing["last_seen"] = seen_at
             self._bump_version_locked()
         return True
@@ -184,6 +199,7 @@ class HostRoster:
                 entry.get("hostname"),
                 entry.get("ip"),
                 last_seen=entry.get("last_seen"),
+                vendor=entry.get("vendor"),
             ):
                 count += 1
         return count

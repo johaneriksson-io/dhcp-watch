@@ -14,7 +14,7 @@ Then open the live hosts page from another device on the same LAN:
 http://<pi-or-host-ip>:8888/
 ```
 
-The page lists recently detected hosts (MAC-keyed identity + last-seen) and updates live over SSE. Hosts drop off after 10 minutes without DHCP activity. On startup, the roster is seeded from recent entries in `/tmp/dhcp_watch.log` (best-effort; `/tmp` may be cleared on reboot).
+The page lists recently detected hosts (MAC-keyed identity + last-seen) and updates live over SSE. Hosts drop off after an hour without DHCP activity. On startup, the roster is seeded from recent entries in `/tmp/dhcp_watch.log` (best-effort; `/tmp` may be cleared on reboot).
 
 ### Live page security notes
 
@@ -82,7 +82,7 @@ live hosts page.
 | `interface` | `"any"` | Interface tcpdump captures on; `any` listens on all of them. Name a specific one (e.g. `"eth0"`) to avoid duplicate packets on a host with several interfaces on the same LAN. |
 | `tcpdump_command` | `"tcpdump"` | The tcpdump executable, resolved on `PATH` unless given as an absolute path. |
 | `log_file` | `"/tmp/dhcp_watch.log"` | Append-only log of detected packets, also read back on startup to seed the live roster. Note that `/tmp` is often cleared on reboot. |
-| `debounce_seconds` | `600` | Per-MAC quiet window after a packet is handled. Repeats inside it still print to the console, but are not logged and raise no alert, which keeps chatty devices from flooding the chat. |
+| `debounce_seconds` | `3600` | Per-MAC quiet window after a packet is handled. Repeats inside it still print to the console, but are not logged and raise no alert, which keeps chatty devices from flooding the chat. |
 
 **Live hosts page** — the LAN-only web UI. See the security notes above before
 widening `web_bind_host`.
@@ -91,8 +91,8 @@ widening `web_bind_host`.
 | --- | --- | --- |
 | `web_bind_host` | `"0.0.0.0"` | Address the page binds to. The default accepts connections on every interface; `"127.0.0.1"` restricts it to this host. |
 | `web_port` | `8888` | TCP port for the page. Startup fails if it is already taken. |
-| `quiet_period_seconds` | `600` | How long a host stays listed after its last DHCP activity. Shown on the page itself as the drop-off window. |
-| `aging_sweep_interval_seconds` | `5` | How often the background sweep drops expired hosts, so entries age out even while the LAN is silent. Lower means a crisper drop-off, at the cost of more wakeups. |
+| `quiet_period_seconds` | `3600` | How long a host stays listed after its last DHCP activity. Shown on the page itself as the drop-off window. |
+| `aging_sweep_interval_seconds` | `60` | How often the background sweep drops expired hosts, so entries age out even while the LAN is silent. Lower means a crisper drop-off, at the cost of more wakeups. |
 | `sse_heartbeat_seconds` | `15` | Interval between keep-alive events on the page's SSE stream, which stops idle connections being closed by proxies or browsers. |
 
 **Outbound lookups** — the external services used for alerts and device

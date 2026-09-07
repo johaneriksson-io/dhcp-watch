@@ -352,14 +352,16 @@ def is_mac_ignored(mac, ignored_macs):
 def apply_packet_to_roster(roster, packet, last_seen=None):
     """Update the live roster from a parsed DHCP packet.
 
-    Called for every detection, including debounce-suppressed ones, and before
-    vendor/nmap lookups so the UI is not gated on those.
+    Called for every detection, including debounce-suppressed ones, first
+    before the vendor/nmap lookups so the UI is not gated on those, then again
+    once they have answered so the page can show the manufacturer.
     """
     return roster.upsert(
         packet.get("mac"),
         packet.get("hostname"),
         packet.get("ip"),
         last_seen=last_seen,
+        vendor=packet.get("vendor") or packet.get("device_type"),
     )
 
 
@@ -505,6 +507,9 @@ def main():
                     packet["device_type"] = probe_device_type(packet["ip"], config)
                 else:
                     packet["device_type"] = None
+                # Second pass, now that the lookups have named the manufacturer.
+                apply_packet_to_roster(roster, packet, last_seen=now)
+
                 output = format_output(packet, suppressed=suppressed, use_color=True)
                 print(output)
 

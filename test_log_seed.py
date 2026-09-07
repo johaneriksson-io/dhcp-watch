@@ -40,10 +40,16 @@ class TestParseLogLine:
         assert entry["ip"] == "192.168.1.10"
         assert abs(entry["last_seen"] - when.timestamp()) < 1.0
 
-    def test_strips_vendor_suffix_from_mac(self):
+    def test_strips_vendor_suffix_from_mac_and_keeps_it(self):
         entry = parse_log_line(_line(_ts(60), vendor="Apple Inc."))
         assert entry is not None
         assert entry["mac"] == "aa:bb:cc:dd:ee:ff"
+        assert entry["vendor"] == "Apple Inc."
+
+    def test_line_without_vendor_has_none(self):
+        entry = parse_log_line(_line(_ts(60)))
+        assert entry is not None
+        assert entry["vendor"] is None
 
     def test_missing_host_and_ip_still_parses(self):
         entry = parse_log_line(_line(_ts(60), hostname=None, ip=None))

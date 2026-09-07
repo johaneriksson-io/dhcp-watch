@@ -52,6 +52,25 @@ def _read_sse_events(url: str, count: int, timeout: float = 3.0) -> list[dict]:
     return events
 
 
+class TestVendorInList:
+    def test_snapshot_carries_vendor(self, live_server):
+        roster, base_url, _httpd, _stop = live_server
+        roster.upsert(
+            "11:22:33:44:55:66", "laptop", "192.168.1.20", last_seen=time.time(),
+            vendor="Apple, Inc.",
+        )
+        events = _read_sse_events(base_url, 1)
+        assert events
+        by_mac = {host["mac"]: host for host in events[0]["hosts"]}
+        assert by_mac["11:22:33:44:55:66"]["vendor"] == "Apple, Inc."
+        assert by_mac["aa:bb:cc:dd:ee:ff"]["vendor"] is None
+
+    def test_page_renders_the_vendor_field(self):
+        page = render_page(600)
+        assert "host.vendor" in page
+        assert "vendor" in page
+
+
 class TestWebPage:
     def test_index_returns_html_with_event_source(self, live_server):
         _roster, base_url, _httpd, _stop = live_server

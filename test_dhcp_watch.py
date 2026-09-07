@@ -78,7 +78,7 @@ class TestConfigDefaultsFile:
         assert DEFAULT_CONFIG_FILE.is_file()
         defaults = load_defaults()
         assert defaults.web_port == 8888
-        assert defaults.quiet_period_seconds == 600
+        assert defaults.quiet_period_seconds == 3600
         assert defaults.log_file == "/tmp/dhcp_watch.log"
         assert defaults.interface == "any"
         assert defaults.alert_on_message_types == ["Discover"]
@@ -435,6 +435,18 @@ class TestApplyPacketToRoster:
         hosts = roster.snapshot()
         assert len(hosts) == 1
         assert hosts[0]["last_seen"] == 1050.0
+
+    def test_vendor_reaches_the_roster(self):
+        roster = HostRoster()
+        packet = self._packet(vendor="Apple, Inc.")
+        apply_packet_to_roster(roster, packet, last_seen=1000.0)
+        assert roster.snapshot()[0]["vendor"] == "Apple, Inc."
+
+    def test_probed_device_type_stands_in_for_a_missing_vendor(self):
+        roster = HostRoster()
+        packet = self._packet(vendor=None, device_type="iPhone/iPad")
+        apply_packet_to_roster(roster, packet, last_seen=1000.0)
+        assert roster.snapshot()[0]["vendor"] == "iPhone/iPad"
 
     def test_upsert_happens_without_vendor_lookup(self):
         roster = HostRoster()

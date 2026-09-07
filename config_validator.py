@@ -72,7 +72,7 @@ class ConfigModel(BaseModel):
         "absolute path.",
     )
     debounce_seconds: int = Field(
-        default=600,
+        default=3600,
         description="Per-MAC quiet window after a packet is handled. Repeats "
         "inside it still print to the console, but are not logged and raise no "
         "alert, which keeps chatty devices from flooding the chat.",
@@ -80,12 +80,12 @@ class ConfigModel(BaseModel):
 
     # Live roster / web UI
     quiet_period_seconds: int = Field(
-        default=600,
+        default=3600,
         description="How long a host stays on the live hosts page after its last "
         "DHCP activity. Also shown on the page itself as the drop-off window.",
     )
     aging_sweep_interval_seconds: float = Field(
-        default=5,
+        default=60,
         description="How often the background sweep drops expired hosts, so the "
         "page ages entries out even while the LAN is silent. Lower means a "
         "crisper drop-off, at the cost of more wakeups.",
