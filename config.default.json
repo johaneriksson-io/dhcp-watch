@@ -4,7 +4,7 @@
   "tcpdump_command": "tcpdump",
   "debounce_seconds": 3600,
   "quiet_period_seconds": 3600,
-  "aging_sweep_interval_seconds": 60,
+  "aging_sweep_interval_seconds": 600,
   "alert_on_message_types": ["Discover"],
   "ignored_hostnames": [],
   "ignored_macs": [],
@@ -22,7 +22,7 @@
   "external_lookup_timeout_seconds": 5,
   "nmap_timeout_seconds": 30,
   "nmap_port_device_map": {
-    "62078": "iPhone/iPad",
+    "62078": "iOS",
     "7000": "AirPlay device",
     "548": "Mac",
     "5009": "Apple TV"
